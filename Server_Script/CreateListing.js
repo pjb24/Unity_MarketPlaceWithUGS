@@ -8,7 +8,7 @@
  * - 동시에 조회/정렬을 위한 인덱스 키(Custom Item)도 생성한다.
  *
  * 데이터 저장 위치(기본값):
- * - 플레이어 인벤토리(Private Custom Items): customId = "inventory", key = "ITEM_<itemInstanceId>"
+ * - 플레이어 인벤토리(Private Custom Items): customId = "inventory", key = "<itemInstanceId>"
  * - 에스크로(Custom Items): customId = "market_escrow", key = "ESCROW_<listingId>"
  * - 리스팅(Custom Items): customId = "market_listings", key = "LISTING_<listingId>"
  * - 인덱스(Custom Items): customId = "market_indexes"
@@ -63,7 +63,7 @@ module.exports = async function CreateListing(params, context, logger) {
     ? Math.floor(expiresInSeconds)
     : 60 * 60 * 24 * 7; // 7 days
 
-  const cloudSave = new DataApi({ accessToken: context.accessToken });
+  const cloudSave = new DataApi(context);
   const projectId = context.projectId;
 
   const nowMs = Date.now();
@@ -71,7 +71,7 @@ module.exports = async function CreateListing(params, context, logger) {
   const expiresAt = new Date(nowMs + _ttl * 1000).toISOString();
 
   const listingId = `L${nowMs.toString(36)}${Math.floor(Math.random() * 1e9).toString(36)}`.toUpperCase();
-  const itemKey = `ITEM_${itemInstanceId}`;
+  const itemKey = itemInstanceId;
   const listingKey = `LISTING_${listingId}`;
   const escrowKey = `ESCROW_${listingId}`;
 
@@ -88,7 +88,7 @@ module.exports = async function CreateListing(params, context, logger) {
 
   // 2) 아이템 검증 + 폴백(경고 로그 필수)
   if (!item.market || typeof item.market !== "object") {
-    logger.warn(`CreateListing fallback: item.market missing. itemInstanceId=${itemInstanceId}`);
+    logger.warning(`CreateListing fallback: item.market missing. itemInstanceId=${itemInstanceId}`);
     item.market = { tradable: false, tradeLock: { isLocked: true, reason: "INVALID_ITEM", until: null } };
   }
   if (item.market.tradable !== true) {
@@ -96,7 +96,7 @@ module.exports = async function CreateListing(params, context, logger) {
   }
 
   if (!item.market.tradeLock || typeof item.market.tradeLock !== "object") {
-    logger.warn(`CreateListing fallback: item.market.tradeLock missing. itemInstanceId=${itemInstanceId}`);
+    logger.warning(`CreateListing fallback: item.market.tradeLock missing. itemInstanceId=${itemInstanceId}`);
     item.market.tradeLock = { isLocked: false, reason: null, until: null };
   }
   if (item.market.tradeLock.isLocked === true) {
@@ -104,7 +104,7 @@ module.exports = async function CreateListing(params, context, logger) {
   }
 
   if (!item.location || typeof item.location !== "object") {
-    logger.warn(`CreateListing fallback: item.location missing. Assume zone=BAG. itemInstanceId=${itemInstanceId}`);
+    logger.warning(`CreateListing fallback: item.location missing. Assume zone=BAG. itemInstanceId=${itemInstanceId}`);
     item.location = { zone: "BAG" };
   }
   if (item.location.zone !== "BAG") {

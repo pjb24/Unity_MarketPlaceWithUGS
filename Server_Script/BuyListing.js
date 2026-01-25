@@ -15,7 +15,7 @@
  * - 판매자 인벤은 CreateListing 시점에 이미 제거되어 있으므로, 구매 완료 시 판매자 인벤 접근이 필요 없다.
  *
  * 데이터 저장 위치(기본값):
- * - 구매자 인벤(Private Custom Items): customId = "inventory", key = "ITEM_<itemInstanceId>"
+ * - 구매자 인벤(Private Custom Items): customId = "inventory", key = "<itemInstanceId>"
  * - 에스크로(Custom Items): customId = "market_escrow", key = "ESCROW_<listingId>"
  * - 리스팅(Custom Items): customId = "market_listings", key = "LISTING_<listingId>"
  * - 인덱스(Custom Items): customId = "market_indexes"
@@ -30,7 +30,7 @@
  *  1) listingId: string (필수)
  *  2) buyerPlayerId: string (선택, 기본 context.playerId)
  *  3) returnZone: "BAG" | "STORAGE" (선택, 기본 "BAG")
- *  4) currencyId: string (선택, 기본 "MT")
+ *  4) currencyId: string (선택, 기본 "MARKETTOKEN")
  *  5) feeBps: number (선택, 기본 0)  // 1 bps = 0.01%
  *  6) feeReceiverPlayerId: string (선택) // 있으면 fee를 해당 플레이어에 지급, 없으면 fee는 소각(=유출)
  *  7) inventoryCustomId: string (선택, 기본 "inventory")
@@ -65,7 +65,7 @@ module.exports = async function BuyListing(params, context, logger) {
 
   const _buyerPlayerId = buyerPlayerId || context.playerId;
   const _returnZone = returnZone || "BAG";
-  const _currencyId = currencyId || "MT";
+  const _currencyId = currencyId || "MARKETTOKEN";
 
   const _feeBps = (typeof feeBps === "number" && Number.isFinite(feeBps) && feeBps >= 0) ?
     Math.floor(feeBps) :
@@ -113,7 +113,7 @@ module.exports = async function BuyListing(params, context, logger) {
     } catch (e) {
       if (e?.message === "LOCKED") throw new Error("BuyListing: listing is busy (lock held).");
       // get 실패는 무시(락이 없을 수도 있음). 무음 폴백 금지 → Warning 로그
-      logger.warn(`BuyListing fallback: lock precheck failed. listingId=${listingId}. err=${e?.message || e}`);
+      logger.warning(`BuyListing fallback: lock precheck failed. listingId=${listingId}. err=${e?.message || e}`);
     }
 
     // 1) 락 작성
@@ -153,7 +153,7 @@ module.exports = async function BuyListing(params, context, logger) {
         }
       });
     } catch (e) {
-      logger.warn(`BuyListing fallback: failed to release txn lock. listingId=${listingId}. err=${e?.message || e}`);
+      logger.warning(`BuyListing fallback: failed to release txn lock. listingId=${listingId}. err=${e?.message || e}`);
     }
   };
 
@@ -265,11 +265,11 @@ module.exports = async function BuyListing(params, context, logger) {
 
     // tradeLock / location 복구 + 폴백(Warning)
     if (!item.market || typeof item.market !== "object") {
-      logger.warn(`BuyListing fallback: item.market missing in escrow. listingId=${listingId}`);
+      logger.warning(`BuyListing fallback: item.market missing in escrow. listingId=${listingId}`);
       item.market = { tradable: true, tradeLock: { isLocked: true, reason: "ESCROW", until: null } };
     }
     if (!item.market.tradeLock || typeof item.market.tradeLock !== "object") {
-      logger.warn(`BuyListing fallback: item.market.tradeLock missing in escrow. listingId=${listingId}`);
+      logger.warning(`BuyListing fallback: item.market.tradeLock missing in escrow. listingId=${listingId}`);
       item.market.tradeLock = { isLocked: true, reason: "ESCROW", until: null };
     }
 
@@ -278,17 +278,17 @@ module.exports = async function BuyListing(params, context, logger) {
     if (!item.lifecycle || typeof item.lifecycle !== "object") item.lifecycle = {};
     item.lifecycle.updatedAt = nowIso;
 
-    const itemKey = `ITEM_${itemInstanceId}`;
+    const itemKey = itemInstanceId;
 
     // 기존 키 존재 시 경고 후 덮어쓰기(충돌은 실제 운영에서 금지하는 게 맞지만, 무음 폴백은 금지)
     try {
       const existingRes = await cloudSave.getPrivateCustomItems(projectId, _inventoryCustomId, [itemKey]);
       const existingRows = (existingRes?.data?.results || []);
       if (existingRows.find(r => r.key === itemKey)) {
-        logger.warn(`BuyListing fallback: inventory already has key. overwrite. key=${itemKey}`);
+        logger.warning(`BuyListing fallback: inventory already has key. overwrite. key=${itemKey}`);
       }
     } catch (e) {
-      logger.warn(`BuyListing fallback: failed to pre-check inventory key. key=${itemKey}. err=${e?.message || e}`);
+      logger.warning(`BuyListing fallback: failed to pre-check inventory key. key=${itemKey}. err=${e?.message || e}`);
     }
 
     await cloudSave.setPrivateCustomItem(projectId, _inventoryCustomId, { key: itemKey, value: item });
@@ -327,7 +327,7 @@ module.exports = async function BuyListing(params, context, logger) {
       await cloudSave.deleteCustomItem(idxStatusPriceKey, projectId, _indexesCustomId);
       await cloudSave.deleteCustomItem(idxSellerStatusKey, projectId, _indexesCustomId);
     } catch (e) {
-      logger.warn(`BuyListing fallback: failed to delete index keys. listingId=${listingId}. err=${e?.message || e}`);
+      logger.warning(`BuyListing fallback: failed to delete index keys. listingId=${listingId}. err=${e?.message || e}`);
     }
 
     return {

@@ -85,11 +85,11 @@ module.exports = async ({ params, context, logger }) => {
 
   // schema 기대 필드 보정(무음 보정 금지: 반드시 warn)
   if (!item.market || typeof item.market !== "object") {
-    logger?.warn?.(`[ClearItemTradeLock] market missing. Creating market object. item=${itemInstanceId}`);
+    logger.warning(`[ClearItemTradeLock] market missing. Creating market object. item=${itemInstanceId}`);
     item.market = {};
   }
   if (!item.market.tradeLock || typeof item.market.tradeLock !== "object") {
-    logger?.warn?.(`[ClearItemTradeLock] market.tradeLock missing. Creating tradeLock object. item=${itemInstanceId}`);
+    logger.warning(`[ClearItemTradeLock] market.tradeLock missing. Creating tradeLock object. item=${itemInstanceId}`);
     item.market.tradeLock = { isLocked: false, reason: null, until: null };
   }
 
@@ -101,7 +101,7 @@ module.exports = async ({ params, context, logger }) => {
 
   // 이미 풀려있음 = 폴백. 무조건 warn.
   if (!prev.isLocked) {
-    logger?.warn?.(
+    logger.warning(
       `[ClearItemTradeLock] fallback: already unlocked. item=${itemInstanceId}, reason=${String(prev.reason)}`
     );
     return {
@@ -119,7 +119,7 @@ module.exports = async ({ params, context, logger }) => {
   const reasonMismatch = hasExpected && String(prev.reason) !== String(expectedReason);
 
   if (reasonMismatch && !force) {
-    logger?.warn?.(
+    logger.warning(
       `[ClearItemTradeLock] fallback: reason mismatch. item=${itemInstanceId}, expected=${expectedReason}, actual=${String(
         prev.reason
       )}`
@@ -135,7 +135,7 @@ module.exports = async ({ params, context, logger }) => {
   }
 
   if (reasonMismatch && force) {
-    logger?.warn?.(
+    logger.warning(
       `[ClearItemTradeLock] force clear despite reason mismatch. item=${itemInstanceId}, expected=${expectedReason}, actual=${String(
         prev.reason
       )}`
@@ -149,7 +149,7 @@ module.exports = async ({ params, context, logger }) => {
 
   if (note != null) {
     if (!item.location || typeof item.location !== "object") {
-      logger?.warn?.(`[ClearItemTradeLock] location missing. Creating location object. item=${itemInstanceId}`);
+      logger.warning(`[ClearItemTradeLock] location missing. Creating location object. item=${itemInstanceId}`);
       item.location = { zone: "BAG", note: null };
     }
     item.location.note = String(note);

@@ -59,7 +59,7 @@ function _getZoneWithFallback(item, logger, playerId, itemInstanceId) {
   let zone = item?.location?.zone ?? null;
   if (!zone) {
     zone = "BAG";
-    logger?.warn?.(
+    logger.warning(
       `[MoveItemToEscrow] item.location.zone missing. fallback zone=BAG applied. playerId=${playerId}, itemInstanceId=${itemInstanceId}`
     );
   }
@@ -118,19 +118,24 @@ module.exports = async ({ params, context, logger }) => {
   const lockReason = params.lockReason ?? "ESCROW";
 
   const dataApi = new DataApi(context);
+  const projectId = context.projectId;
 
   const nowIso = _nowIso();
 
   // ---------- 1) 아이템 로드 (단건 키 → 컨테이너 폴백) ----------
   let item = null;
   let loadPath = null;
+  let itemWriteLock = null;
+  let containerWriteLock = null;
 
   try {
-    const res = await dataApi.getPrivateCustomItems(playerId, inventoryCustomId, inventoryKey);
-    item = res?.data?.value ?? null;
+    const res = await dataApi.getPrivateCustomItems(projectId, inventoryCustomId, [inventoryKey]);
+    const row = res?.data?.results?.[0];
+    item = row?.value ?? null;
+    itemWriteLock = row?.writeLock ?? null;
     loadPath = `privateCustomItem:${inventoryCustomId}/${inventoryKey}`;
   } catch (e) {
-    logger?.warn?.(
+    logger.warning(
       `[MoveItemToEscrow] primary load failed. fallback will run. playerId=${playerId}, customId=${inventoryCustomId}, key=${inventoryKey}, err=${e?.message ?? e}`
     );
   }
@@ -138,8 +143,10 @@ module.exports = async ({ params, context, logger }) => {
   let container = null;
   if (!item && inventoryContainerKey) {
     try {
-      const res = await dataApi.getPrivateCustomItems(playerId, inventoryCustomId, inventoryContainerKey);
-      container = res?.data?.value ?? null;
+      const res = await dataApi.getPrivateCustomItems(projectId, inventoryCustomId, [inventoryContainerKey]);
+      const row = res?.data?.results?.[0];
+      container = row?.value ?? null;
+      containerWriteLock = row?.writeLock ?? null;
       loadPath = `privateCustomItemContainer:${inventoryCustomId}/${inventoryContainerKey}`;
 
       if (Array.isArray(container)) {
@@ -148,11 +155,11 @@ module.exports = async ({ params, context, logger }) => {
         item = container[itemInstanceId] ?? null;
       }
 
-      logger?.warn?.(
+      logger.warning(
         `[MoveItemToEscrow] fallback container load used. playerId=${playerId}, customId=${inventoryCustomId}, containerKey=${inventoryContainerKey}, itemInstanceId=${itemInstanceId}`
       );
     } catch (e) {
-      logger?.warn?.(
+      logger.warning(
         `[MoveItemToEscrow] fallback container load failed. playerId=${playerId}, customId=${inventoryCustomId}, containerKey=${inventoryContainerKey}, err=${e?.message ?? e}`
       );
     }
@@ -224,12 +231,16 @@ module.exports = async ({ params, context, logger }) => {
   try {
     if (!inventoryContainerKey) {
       // 단건 키 저장
-      await dataApi.setPrivateCustomItem(playerId, inventoryCustomId, inventoryKey, next);
+      await dataApi.setPrivateCustomItem(projectId, inventoryCustomId, {
+          key: inventoryKey,
+          value: next,
+          ...DataApi(itemWriteLock ? { writeLock: itemWriteLock } : {}),
+        });
     } else {
       // 컨테이너 저장(컨테이너 형태 유지)
       if (!container) {
         // 여기 오면 로드 로직이 꼬인 것. 무음 처리 금지.
-        logger?.warn?.(
+        logger.warning(
           `[MoveItemToEscrow] container write requested but container is null. blocked. playerId=${playerId}, itemInstanceId=${itemInstanceId}`
         );
         return {
@@ -277,13 +288,17 @@ module.exports = async ({ params, context, logger }) => {
         };
       }
 
-      await dataApi.setPrivateCustomItem(playerId, inventoryCustomId, inventoryContainerKey, nextContainer);
-      logger?.warn?.(
+      await dataApi.setPrivateCustomItem(projectId, inventoryCustomId, {
+        key: inventoryContainerKey,
+        value: nextContainer,
+        ...(containerWriteLock ? { writeLock: containerWriteLock } : {}),
+      });
+      logger.warning(
         `[MoveItemToEscrow] container write used (non-ideal). playerId=${playerId}, containerKey=${inventoryContainerKey}, itemInstanceId=${itemInstanceId}`
       );
     }
   } catch (e) {
-    logger?.warn?.(
+    logger.warning(
       `[MoveItemToEscrow] write failed. playerId=${playerId}, itemInstanceId=${itemInstanceId}, err=${e?.message ?? e}`
     );
     return {
@@ -299,11 +314,11 @@ module.exports = async ({ params, context, logger }) => {
     let verifyItem = null;
 
     if (!inventoryContainerKey) {
-      const res = await dataApi.getPrivateCustomItems(playerId, inventoryCustomId, inventoryKey);
-      verifyItem = res?.data?.value ?? null;
+      const res = await dataApi.getPrivateCustomItems(projectId, inventoryCustomId, [inventoryKey]);
+      verifyItem = res?.data?.results?.[0]?.value ?? null;
     } else {
-      const res = await dataApi.getPrivateCustomItems(playerId, inventoryCustomId, inventoryContainerKey);
-      const verifyContainer = res?.data?.value ?? null;
+      const res = await dataApi.getPrivateCustomItems(projectId, inventoryCustomId, [inventoryContainerKey]);
+      const verifyContainer = res?.data?.results?.[0]?.value ?? null;
       if (Array.isArray(verifyContainer)) {
         verifyItem = verifyContainer.find(x => x?.instanceId === itemInstanceId || x?.id === itemInstanceId) ?? null;
       } else if (verifyContainer && typeof verifyContainer === "object") {
@@ -315,7 +330,7 @@ module.exports = async ({ params, context, logger }) => {
     const locked = verifyItem?.market?.tradeLock?.isLocked === true;
 
     if (vz !== "MARKET_ESCROW" || !locked) {
-      logger?.warn?.(
+      logger.warning(
         `[MoveItemToEscrow] verify failed. playerId=${playerId}, itemInstanceId=${itemInstanceId}, zone=${vz}, locked=${locked}`
       );
       return {
@@ -333,7 +348,7 @@ module.exports = async ({ params, context, logger }) => {
       details: { playerId, itemInstanceId, nowIso, listingId, loadedFrom: loadPath },
     };
   } catch (e) {
-    logger?.warn?.(
+    logger.warning(
       `[MoveItemToEscrow] verify read failed. playerId=${playerId}, itemInstanceId=${itemInstanceId}, err=${e?.message ?? e}`
     );
     return {

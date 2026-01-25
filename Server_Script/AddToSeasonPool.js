@@ -186,7 +186,7 @@ module.exports = async ({ params, context, logger }) => {
       const reread = await _getPrivateItem(cloudSaveApi, projectId, TXN_CUSTOM_ID, tKey);
       stateWriteLock = reread?.writeLock ?? stateWriteLock;
     } catch (e) {
-      logger.warn(
+      logger.warning(
         `AddToSeasonPool fallback: failed to persist ownerCredited step. ` +
         `This can cause double-credit if retried. key=${tKey}, txnId=${txnId}`
       );
@@ -221,7 +221,7 @@ module.exports = async ({ params, context, logger }) => {
       await _setPrivateItem(cloudSaveApi, projectId, META_CUSTOM_ID, mKey, meta, metaWrap?.writeLock ?? null);
     } catch (e) {
       // owner는 이미 지급됨. 메타 저장 실패는 재시도 시 중복 적립 위험.
-      logger.warn(
+      logger.warning(
         `AddToSeasonPool fallback: failed to persist season meta. ` +
         `This can cause double-credit if retried. metaKey=${mKey}, txnKey=${tKey}, txnId=${txnId}`
       );
@@ -239,7 +239,7 @@ module.exports = async ({ params, context, logger }) => {
       const reread = await _getPrivateItem(cloudSaveApi, projectId, TXN_CUSTOM_ID, tKey);
       stateWriteLock = reread?.writeLock ?? stateWriteLock;
     } catch (e) {
-      logger.warn(
+      logger.warning(
         `AddToSeasonPool fallback: failed to persist metaUpdated step. ` +
         `This can cause repeated calls. key=${tKey}, txnId=${txnId}`
       );
@@ -272,7 +272,7 @@ module.exports = async ({ params, context, logger }) => {
   try {
     await _setPrivateItem(cloudSaveApi, projectId, TXN_CUSTOM_ID, tKey, state, stateWriteLock);
   } catch (e) {
-    logger.warn(
+    logger.warning(
       `AddToSeasonPool fallback: failed to persist COMPLETED. ` +
       `This can cause repeated calls. key=${tKey}, txnId=${txnId}`
     );

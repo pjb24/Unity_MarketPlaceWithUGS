@@ -160,7 +160,7 @@ module.exports = async ({ params, context, logger }) => {
     try {
       await _writeIdempotencyRecord(cloudSaveApi, projectId, idempotencyKey, payload);
     } catch (e) {
-      logger.warn(
+      logger.warning(
         `DebitCurrency idempotency write failed (fallback 발생): key=${idempotencyKey}. ` +
         `This can cause double-debit if retried. txnId=${txnId}`
       );

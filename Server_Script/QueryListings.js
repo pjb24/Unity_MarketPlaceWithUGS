@@ -82,7 +82,7 @@ module.exports = async function QueryListings(params, context, logger) {
   if (_order === "DESC") {
     // 현재 키 설계상 listCustomItems는 기본 오름차순 조회이며, 서버에서 역순 조회가 안 된다.
     // order=DESC를 받되, 실제 반환은 ASC 기반이 될 수 있음을 Warning으로 알린다(무음 금지).
-    logger.warn("QueryListings fallback: order=DESC requested but Cloud Save listCustomItems does not support reverse order. Returning ASC-based page.");
+    logger.warning("QueryListings fallback: order=DESC requested but Cloud Save listCustomItems does not support reverse order. Returning ASC-based page.");
   }
 
   // 1) 인덱스 페이지 조회
@@ -124,12 +124,12 @@ module.exports = async function QueryListings(params, context, logger) {
     // key 끝의 _<listingId> 추출
     const lastUnderscore = k.lastIndexOf("_");
     if (lastUnderscore <= 0 || lastUnderscore === k.length - 1) {
-      logger.warn(`QueryListings fallback: malformed index key. key=${k}`);
+      logger.warning(`QueryListings fallback: malformed index key. key=${k}`);
       continue;
     }
     const id = k.substring(lastUnderscore + 1);
     if (!id) {
-      logger.warn(`QueryListings fallback: failed to parse listingId. key=${k}`);
+      logger.warning(`QueryListings fallback: failed to parse listingId. key=${k}`);
       continue;
     }
     listingIds.push(id);
@@ -159,14 +159,14 @@ module.exports = async function QueryListings(params, context, logger) {
 
     if (!v || typeof v !== "object") {
       skipped += 1;
-      logger.warn(`QueryListings fallback: listing missing for index. listingKey=${lk}`);
+      logger.warning(`QueryListings fallback: listing missing for index. listingKey=${lk}`);
       continue;
     }
 
     // ACTIVE 인덱스 기반이므로, ACTIVE가 아니면 불일치로 제외 + Warning
     if (v.status !== "ACTIVE") {
       skipped += 1;
-      logger.warn(`QueryListings fallback: listing status mismatch for ACTIVE index. listingId=${id}, status=${v.status}`);
+      logger.warning(`QueryListings fallback: listing status mismatch for ACTIVE index. listingId=${id}, status=${v.status}`);
       continue;
     }
 

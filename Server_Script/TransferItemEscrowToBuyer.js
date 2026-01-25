@@ -20,7 +20,7 @@
  *
  * 고정 규칙:
  * - 구매자 인벤 단건 키 저장 방식만 지원: inventoryKey = itemInstanceId
- * - escrowKey = `ESCROW_LISTING_${listingId}` (listingId 없으면 경고 + item 기반 키로 폴백)
+ * - escrowKey = `ESCROW_${listingId}` (listingId 없으면 경고 + item 기반 키로 폴백)
  *
  * return:
  *  - { ok: true, transferred: boolean, escrowKey: string|null, item: object|null, details: object }
@@ -83,25 +83,29 @@ module.exports = async ({ params, context, logger }) => {
 
   const nowIso = _nowIso();
   const dataApi = new DataApi(context);
+  const projectId = context.projectId;
 
   // ---- escrowKey 규칙 ----
   let escrowKey = null;
   if (listingId) {
-    escrowKey = `ESCROW_LISTING_${listingId}`;
+    escrowKey = `ESCROW_${listingId}`;
   } else {
     escrowKey = `ESCROW_ITEM_${itemInstanceId}`;
-    logger?.warn?.(
+    logger.warning(
       `[TransferItemEscrowToBuyer] listingId missing. fallback escrowKey=item-based. itemInstanceId=${itemInstanceId}, escrowKey=${escrowKey}`
     );
   }
 
   // ---------- 1) 에스크로 로드 ----------
   let escrow = null;
+  let escrowWriteLock = null;
   try {
-    const res = await dataApi.getCustomItems(marketOwnerPlayerId, escrowCustomId, escrowKey);
-    escrow = res?.data?.value ?? null;
+    const res = await dataApi.getCustomItems(projectId, escrowCustomId, [escrowKey]);
+    const row = res?.data?.results?.[0] ?? null;
+    escrow = row?.value ?? null;
+    escrowWriteLock = row?.writeLock ?? null;
   } catch (e) {
-    logger?.warn?.(
+    logger.warning(
       `[TransferItemEscrowToBuyer] escrow load failed. marketOwnerPlayerId=${marketOwnerPlayerId}, customId=${escrowCustomId}, key=${escrowKey}, err=${e?.message ?? e}`
     );
   }
@@ -201,8 +205,8 @@ module.exports = async ({ params, context, logger }) => {
 
   if (!allowOverwriteBuyerInventory) {
     try {
-      const exist = await dataApi.getPrivateCustomItems(buyerPlayerId, inventoryCustomId, buyerInventoryKey);
-      const existVal = exist?.data?.value ?? null;
+      const exist = await dataApi.getPrivateCustomItems(projectId, inventoryCustomId, [buyerInventoryKey]);
+      const existVal = exist?.data?.results?.[0]?.value ?? null;
       if (existVal) {
         return {
           ok: true,
@@ -221,7 +225,7 @@ module.exports = async ({ params, context, logger }) => {
       }
     } catch (e) {
       // 404일 수 있음. 폴백이므로 Warning 로그.
-      logger?.warn?.(
+      logger.warning(
         `[TransferItemEscrowToBuyer] buyer inventory pre-check fallback path used. buyerPlayerId=${buyerPlayerId}, customId=${inventoryCustomId}, key=${buyerInventoryKey}, err=${e?.message ?? e}`
       );
     }
@@ -247,9 +251,9 @@ module.exports = async ({ params, context, logger }) => {
 
   // ---------- 6) 저장 순서: (A) 구매자 인벤 write → (B) escrow tombstone ----------
   try {
-    await dataApi.setPrivateCustomItem(buyerPlayerId, inventoryCustomId, buyerInventoryKey, nextItem);
+    await dataApi.setPrivateCustomItem(projectId, inventoryCustomId, { key: buyerInventoryKey, value: nextItem });
   } catch (e) {
-    logger?.warn?.(
+    logger.warning(
       `[TransferItemEscrowToBuyer] buyer inventory write failed. buyerPlayerId=${buyerPlayerId}, customId=${inventoryCustomId}, key=${buyerInventoryKey}, err=${e?.message ?? e}`
     );
     return {
@@ -267,24 +271,28 @@ module.exports = async ({ params, context, logger }) => {
     nextEscrow.soldAt = nowIso;
     nextEscrow.buyerPlayerId = buyerPlayerId;
     nextEscrow.item = null; // tombstone
-    await dataApi.setCustomItem(marketOwnerPlayerId, escrowCustomId, escrowKey, nextEscrow);
+    await dataApi.setCustomItem(projectId, escrowCustomId, {
+      key: escrowKey,
+      value: nextEscrow,
+      ...(escrowWriteLock ? { writeLock: escrowWriteLock } : {}),
+    });
   } catch (e) {
     // 구매자는 이미 받음. 무조건 Warning.
-    logger?.warn?.(
+    logger.warning(
       `[TransferItemEscrowToBuyer] escrow tombstone write failed (non-fatal). marketOwnerPlayerId=${marketOwnerPlayerId}, key=${escrowKey}, err=${e?.message ?? e}`
     );
   }
 
   // ---------- 7) 재조회 검증(구매자 인벤) ----------
   try {
-    const vr = await dataApi.getPrivateCustomItems(buyerPlayerId, inventoryCustomId, buyerInventoryKey);
-    const v = vr?.data?.value ?? null;
+    const vr = await dataApi.getPrivateCustomItems(projectId, inventoryCustomId, [buyerInventoryKey]);
+    const v = vr?.data?.results?.[0]?.value ?? null;
 
     const vz = v?.location?.zone ?? null;
     const locked = v?.market?.tradeLock?.isLocked === true;
 
     if (!v || vz !== buyerZone || locked) {
-      logger?.warn?.(
+      logger.warning(
         `[TransferItemEscrowToBuyer] verify failed. buyerPlayerId=${buyerPlayerId}, itemInstanceId=${itemInstanceId}, zone=${vz}, expected=${buyerZone}, locked=${locked}`
       );
       return {
@@ -312,7 +320,7 @@ module.exports = async ({ params, context, logger }) => {
       },
     };
   } catch (e) {
-    logger?.warn?.(
+    logger.warning(
       `[TransferItemEscrowToBuyer] verify read failed. buyerPlayerId=${buyerPlayerId}, itemInstanceId=${itemInstanceId}, err=${e?.message ?? e}`
     );
     return {

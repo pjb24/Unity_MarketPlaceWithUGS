@@ -155,7 +155,7 @@ module.exports = async ({ params, context, logger }) => {
     try {
       await _writeIdempotencyRecord(cloudSaveApi, projectId, idempotencyKey, payload);
     } catch (e) {
-      logger.warn(
+      logger.warning(
         `CreditCurrency idempotency write failed (fallback 발생): key=${idempotencyKey}. ` +
         `This can cause double-credit if retried. txnId=${txnId}`
       );

@@ -80,13 +80,13 @@ module.exports = async function GetMyListings(params, context, logger) {
 
     const lastUnderscore = k.lastIndexOf("_");
     if (lastUnderscore <= 0 || lastUnderscore === k.length - 1) {
-      logger.warn(`GetMyListings fallback: malformed index key. key=${k}`);
+      logger.warning(`GetMyListings fallback: malformed index key. key=${k}`);
       continue;
     }
 
     const id = k.substring(lastUnderscore + 1);
     if (!id) {
-      logger.warn(`GetMyListings fallback: failed to parse listingId. key=${k}`);
+      logger.warning(`GetMyListings fallback: failed to parse listingId. key=${k}`);
       continue;
     }
 
@@ -117,21 +117,21 @@ module.exports = async function GetMyListings(params, context, logger) {
 
     if (!v || typeof v !== "object") {
       skipped += 1;
-      logger.warn(`GetMyListings fallback: listing missing for index. listingKey=${lk}`);
+      logger.warning(`GetMyListings fallback: listing missing for index. listingKey=${lk}`);
       continue;
     }
 
     // ACTIVE 인덱스 기반이므로, ACTIVE가 아니면 불일치로 제외 + Warning
     if (v.status !== "ACTIVE") {
       skipped += 1;
-      logger.warn(`GetMyListings fallback: listing status mismatch for ACTIVE index. listingId=${id}, status=${v.status}`);
+      logger.warning(`GetMyListings fallback: listing status mismatch for ACTIVE index. listingId=${id}, status=${v.status}`);
       continue;
     }
 
     // 판매자 불일치도 제외 + Warning
     if (v.sellerPlayerId !== _sellerPlayerId) {
       skipped += 1;
-      logger.warn(`GetMyListings fallback: listing seller mismatch. listingId=${id}, seller=${v.sellerPlayerId}, expected=${_sellerPlayerId}`);
+      logger.warning(`GetMyListings fallback: listing seller mismatch. listingId=${id}, seller=${v.sellerPlayerId}, expected=${_sellerPlayerId}`);
       continue;
     }
 

@@ -161,7 +161,7 @@ module.exports = async ({ params, context, logger }) => {
     try {
       await _writeIdempotencyRecord(cloudSaveApi, projectId, idKey, payload);
     } catch (e) {
-      logger.warn(
+      logger.warning(
         `BurnCurrency idempotency write failed (fallback 발생): key=${idKey}. ` +
         `This can cause double-burn if retried. txnId=${txnId}`
       );

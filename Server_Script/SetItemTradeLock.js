@@ -73,7 +73,7 @@ module.exports = async ({ params, context, logger }) => {
     }
   } else {
     if (until != null) {
-      logger?.warn?.(`[SetItemTradeLock] unlock requested but until provided. Ignoring until. item=${itemInstanceId}`);
+      logger.warning(`[SetItemTradeLock] unlock requested but until provided. Ignoring until. item=${itemInstanceId}`);
     }
   }
 
@@ -100,11 +100,11 @@ module.exports = async ({ params, context, logger }) => {
 
   // schema 기대 필드 보정(무음 보정 금지: 반드시 warn)
   if (!item.market || typeof item.market !== "object") {
-    logger?.warn?.(`[SetItemTradeLock] market missing. Creating market object. item=${itemInstanceId}`);
+    logger.warning(`[SetItemTradeLock] market missing. Creating market object. item=${itemInstanceId}`);
     item.market = {};
   }
   if (!item.market.tradeLock || typeof item.market.tradeLock !== "object") {
-    logger?.warn?.(`[SetItemTradeLock] market.tradeLock missing. Creating tradeLock object. item=${itemInstanceId}`);
+    logger.warning(`[SetItemTradeLock] market.tradeLock missing. Creating tradeLock object. item=${itemInstanceId}`);
     item.market.tradeLock = { isLocked: false, reason: null, until: null };
   }
 
@@ -115,7 +115,7 @@ module.exports = async ({ params, context, logger }) => {
 
   if (note != null) {
     if (!item.location || typeof item.location !== "object") {
-      logger?.warn?.(`[SetItemTradeLock] location missing. Creating location object. item=${itemInstanceId}`);
+      logger.warning(`[SetItemTradeLock] location missing. Creating location object. item=${itemInstanceId}`);
       item.location = { zone: "BAG", note: null };
     }
     item.location.note = String(note);

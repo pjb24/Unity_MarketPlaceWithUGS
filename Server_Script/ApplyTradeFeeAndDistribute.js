@@ -236,7 +236,7 @@ module.exports = async ({ params, context, logger }) => {
     } catch (e) {
       // seller는 이미 지급됨. 여기서 실패하면 재시도 시 중복 지급 가능성이 생김.
       // 따라서 Warning 로그로 폴백(위험) 명시 + 에러로 중단.
-      logger.warn(
+      logger.warning(
         `ApplyTradeFeeAndDistribute fallback: failed to persist seller step. ` +
         `This can cause double-credit if retried. key=${idKey}, txnId=${txnId}`
       );
@@ -283,7 +283,7 @@ module.exports = async ({ params, context, logger }) => {
       const reread = await _getCustomItem(cloudSaveApi, projectId, idKey);
       stateWriteLock = reread?.writeLock ?? stateWriteLock;
     } catch (e) {
-      logger.warn(
+      logger.warning(
         `ApplyTradeFeeAndDistribute fallback: failed to persist pool step. ` +
         `This can cause double-credit if retried. key=${idKey}, txnId=${txnId}`
       );
@@ -328,7 +328,7 @@ module.exports = async ({ params, context, logger }) => {
   } catch (e) {
     // 완료 마킹 실패는 재시도 시 "이미 지급된 상태"를 또 실행할 위험.
     // 단계 저장은 이미 했지만, 그래도 위험하니 Warning + 에러.
-    logger.warn(
+    logger.warning(
       `ApplyTradeFeeAndDistribute fallback: failed to persist COMPLETED. ` +
       `This can cause repeated calls. key=${idKey}, txnId=${txnId}`
     );

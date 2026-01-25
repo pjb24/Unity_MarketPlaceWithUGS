@@ -70,7 +70,7 @@ module.exports = async function GetListing(params, context, logger) {
       const escrowRow = escrowRows.find(r => r.key === escrowKey);
 
       if (!escrowRow || typeof escrowRow.value !== "object" || escrowRow.value === null) {
-        logger.warn(`GetListing fallback: escrow missing. listingId=${listingId}, escrowKey=${escrowKey}`);
+        logger.warning(`GetListing fallback: escrow missing. listingId=${listingId}, escrowKey=${escrowKey}`);
         escrow = null;
       } else {
         const escrowValue = escrowRow.value;
@@ -84,7 +84,7 @@ module.exports = async function GetListing(params, context, logger) {
         }
       }
     } catch (e) {
-      logger.warn(`GetListing fallback: failed to read escrow. listingId=${listingId}. err=${e?.message || e}`);
+      logger.warning(`GetListing fallback: failed to read escrow. listingId=${listingId}. err=${e?.message || e}`);
       escrow = null;
     }
   }

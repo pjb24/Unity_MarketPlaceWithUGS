@@ -10,7 +10,7 @@
  * - 에스크로는 삭제하지 않고 status=CANCELED + item=null tombstone 처리(감사용).
  *
  * 데이터 저장 위치(기본값):
- * - 플레이어 인벤토리(Private Custom Items): customId = "inventory", key = "ITEM_<itemInstanceId>"
+ * - 플레이어 인벤토리(Private Custom Items): customId = "inventory", key = "<itemInstanceId>"
  * - 에스크로(Custom Items): customId = "market_escrow", key = "ESCROW_<listingId>"
  * - 리스팅(Custom Items): customId = "market_listings", key = "LISTING_<listingId>"
  * - 인덱스(Custom Items): customId = "market_indexes"
@@ -89,10 +89,10 @@ module.exports = async function CancelListing(params, context, logger) {
   const itemInstanceId = listing.itemInstanceId;
 
   if (typeof createdAt !== "string" || createdAt.length < 10) {
-    logger.warn(`CancelListing fallback: listing.createdAt invalid. listingId=${listingId}`);
+    logger.warning(`CancelListing fallback: listing.createdAt invalid. listingId=${listingId}`);
   }
   if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
-    logger.warn(`CancelListing fallback: listing.price invalid. listingId=${listingId}`);
+    logger.warning(`CancelListing fallback: listing.price invalid. listingId=${listingId}`);
   }
   if (!itemInstanceId || typeof itemInstanceId !== "string") {
     throw new Error("CancelListing: listing.itemInstanceId missing.");
@@ -108,11 +108,11 @@ module.exports = async function CancelListing(params, context, logger) {
       escrow = escrowRow.value;
     }
   } catch (e) {
-    logger.warn(`CancelListing fallback: failed to load escrow. listingId=${listingId}. err=${e?.message || e}`);
+    logger.warning(`CancelListing fallback: failed to load escrow. listingId=${listingId}. err=${e?.message || e}`);
   }
 
   if (!escrow) {
-    logger.warn(`CancelListing fallback: escrow missing. listingId=${listingId} (cannot restore item).`);
+    logger.warning(`CancelListing fallback: escrow missing. listingId=${listingId} (cannot restore item).`);
   }
 
   // 3) 아이템 복구(가능한 경우)
@@ -123,11 +123,11 @@ module.exports = async function CancelListing(params, context, logger) {
 
     // tradeLock / location 복구 + 폴백(Warning)
     if (!item.market || typeof item.market !== "object") {
-      logger.warn(`CancelListing fallback: item.market missing in escrow. listingId=${listingId}`);
+      logger.warning(`CancelListing fallback: item.market missing in escrow. listingId=${listingId}`);
       item.market = { tradable: true, tradeLock: { isLocked: true, reason: "ESCROW", until: null } };
     }
     if (!item.market.tradeLock || typeof item.market.tradeLock !== "object") {
-      logger.warn(`CancelListing fallback: item.market.tradeLock missing in escrow. listingId=${listingId}`);
+      logger.warning(`CancelListing fallback: item.market.tradeLock missing in escrow. listingId=${listingId}`);
       item.market.tradeLock = { isLocked: true, reason: "ESCROW", until: null };
     }
 
@@ -140,17 +140,17 @@ module.exports = async function CancelListing(params, context, logger) {
     if (!item.lifecycle || typeof item.lifecycle !== "object") item.lifecycle = {};
     item.lifecycle.updatedAt = nowIso;
 
-    const itemKey = `ITEM_${itemInstanceId}`;
+    const itemKey = itemInstanceId;
 
     // 인벤에 복원(덮어쓰기 방지용 검증: 기존 키 존재 시 경고 후 덮어쓰기)
     try {
       const existingRes = await cloudSave.getPrivateCustomItems(projectId, _inventoryCustomId, [itemKey]);
       const existingRows = (existingRes?.data?.results || []);
       if (existingRows.find(r => r.key === itemKey)) {
-        logger.warn(`CancelListing fallback: inventory already has key. overwrite. key=${itemKey}`);
+        logger.warning(`CancelListing fallback: inventory already has key. overwrite. key=${itemKey}`);
       }
     } catch (e) {
-      logger.warn(`CancelListing fallback: failed to pre-check inventory key. key=${itemKey}. err=${e?.message || e}`);
+      logger.warning(`CancelListing fallback: failed to pre-check inventory key. key=${itemKey}. err=${e?.message || e}`);
     }
 
     await cloudSave.setPrivateCustomItem(projectId, _inventoryCustomId, { key: itemKey, value: item });
@@ -167,7 +167,7 @@ module.exports = async function CancelListing(params, context, logger) {
     await cloudSave.setCustomItem(projectId, _escrowCustomId, { key: escrowKey, value: escrowTombstone });
   } else {
     // 에스크로가 없으면 리스팅만 취소 처리하고 인덱스 정리
-    logger.warn(`CancelListing fallback: skip item restore. listingId=${listingId}`);
+    logger.warning(`CancelListing fallback: skip item restore. listingId=${listingId}`);
     // 에스크로 tombstone도 시도(없는 키면 생성됨)
     await cloudSave.setCustomItem(projectId, _escrowCustomId, {
       key: escrowKey,
@@ -209,7 +209,7 @@ module.exports = async function CancelListing(params, context, logger) {
     await cloudSave.deleteCustomItem(idxStatusPriceKey, projectId, _indexesCustomId);
     await cloudSave.deleteCustomItem(idxSellerStatusKey, projectId, _indexesCustomId);
   } catch (e) {
-    logger.warn(`CancelListing fallback: failed to delete index keys. listingId=${listingId}. err=${e?.message || e}`);
+    logger.warning(`CancelListing fallback: failed to delete index keys. listingId=${listingId}. err=${e?.message || e}`);
   }
 
   return {

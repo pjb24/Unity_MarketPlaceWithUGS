@@ -96,9 +96,9 @@ function _stableStringify(value) {
  * Cloud Save Private Custom Items 읽기
  * - 폴백 발생 시 Warning 로그 필수
  */
-async function _getPrivateCustomItems(cloudSave, projectId, playerId, customId, keys, logger) {
+async function _getPrivateCustomItems(cloudSave, projectId, customId, keys, logger) {
   if (typeof cloudSave.getPrivateCustomItems === "function") {
-    return await cloudSave.getPrivateCustomItems(projectId, playerId, customId, keys);
+    return await cloudSave.getPrivateCustomItems(projectId, customId, keys);
   }
 
   // 폴백: 메서드가 없으면 위험. 무음 금지 -> Warning
@@ -223,7 +223,7 @@ module.exports = async ({ params, context, logger }) => {
   // 1) 인벤 읽기 (Cloud Save)
   let res = null;
   try {
-    res = await _getPrivateCustomItems(cloudSave, projectId, playerId, CUSTOM_ID, keys, logger);
+    res = await _getPrivateCustomItems(cloudSave, projectId, CUSTOM_ID, keys, logger);
   } catch (e) {
     logger.warning("GetInventorySnapshot: inventory read failed.", {
       customId: CUSTOM_ID,

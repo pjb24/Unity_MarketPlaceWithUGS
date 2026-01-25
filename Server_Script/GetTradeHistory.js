@@ -67,7 +67,7 @@ module.exports = async function GetTradeHistory(params, context, logger) {
   const projectId = context.projectId;
 
   if (_order === "DESC") {
-    logger.warn("GetTradeHistory fallback: order=DESC requested but Cloud Save listCustomItems does not support reverse order. Returning ASC-based page.");
+    logger.warning("GetTradeHistory fallback: order=DESC requested but Cloud Save listCustomItems does not support reverse order. Returning ASC-based page.");
   }
 
   // 1) 인덱스 keyPrefix 결정
@@ -91,7 +91,7 @@ module.exports = async function GetTradeHistory(params, context, logger) {
     }
 
     // 알 수 없는 토큰은 폴백 처리(Warning) 후 무시
-    logger.warn(`GetTradeHistory fallback: unknown pageToken format. token=${t}`);
+    logger.warning(`GetTradeHistory fallback: unknown pageToken format. token=${t}`);
     return { phase: (_role === "SELLER") ? "S" : "B", token: null };
   };
 
@@ -135,13 +135,13 @@ module.exports = async function GetTradeHistory(params, context, logger) {
 
     const lastUnderscore = k.lastIndexOf("_");
     if (lastUnderscore <= 0 || lastUnderscore === k.length - 1) {
-      logger.warn(`GetTradeHistory fallback: malformed index key. key=${k}`);
+      logger.warning(`GetTradeHistory fallback: malformed index key. key=${k}`);
       continue;
     }
 
     const id = k.substring(lastUnderscore + 1);
     if (!id) {
-      logger.warn(`GetTradeHistory fallback: failed to parse tradeId. key=${k}`);
+      logger.warning(`GetTradeHistory fallback: failed to parse tradeId. key=${k}`);
       continue;
     }
 
@@ -171,14 +171,14 @@ module.exports = async function GetTradeHistory(params, context, logger) {
 
     if (!v || typeof v !== "object") {
       skipped += 1;
-      logger.warn(`GetTradeHistory fallback: trade missing for index. tradeKey=${tk}`);
+      logger.warning(`GetTradeHistory fallback: trade missing for index. tradeKey=${tk}`);
       continue;
     }
 
     // 최소 검증(필드 없으면 경고 + 포함은 가능하지만, 여기선 운영 안정성 위해 제외)
     if (!v.tradeId || v.tradeId !== id) {
       skipped += 1;
-      logger.warn(`GetTradeHistory fallback: tradeId mismatch. expected=${id}, got=${v.tradeId}`);
+      logger.warning(`GetTradeHistory fallback: tradeId mismatch. expected=${id}, got=${v.tradeId}`);
       continue;
     }
 

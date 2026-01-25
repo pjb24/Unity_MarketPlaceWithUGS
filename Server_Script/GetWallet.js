@@ -101,7 +101,7 @@ module.exports = async ({ params, context, logger }) => {
   for (const id of currencyIds) {
     const found = map.get(id);
     if (!found) {
-      logger.warn(`GetWallet fallback: currency not found. currencyId=${id}, playerId=${targetPlayerId}. Returning balance=0.`);
+      logger.warning(`GetWallet fallback: currency not found. currencyId=${id}, playerId=${targetPlayerId}. Returning balance=0.`);
       currencies[id] = { balance: 0, writeLock: null };
       continue;
     }

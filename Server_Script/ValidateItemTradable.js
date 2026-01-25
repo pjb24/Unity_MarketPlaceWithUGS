@@ -52,6 +52,7 @@ module.exports = async ({ params, context, logger }) => {
   const inventoryContainerKey = params.inventoryContainerKey ?? null;
 
   const dataApi = new DataApi(context);
+  const projectId = context.projectId;
 
   const nowIso = new Date().toISOString();
   const nowMs = Date.now();
@@ -62,12 +63,12 @@ module.exports = async ({ params, context, logger }) => {
 
   // (A) 단건 키로 저장된 경우: key == itemInstanceId (권장)
   try {
-    const res = await dataApi.getPrivateCustomItem(playerId, inventoryCustomId, inventoryKey);
-    item = res?.data?.value ?? null;
-    loadPath = `privateCustomItem:${inventoryCustomId}/${inventoryKey}`;
+    const res = await dataApi.getPrivateCustomItem(projectId, inventoryCustomId, [inventoryKey]);
+    item = res?.data?.results?.[0]?.value ?? null;
+    loadPath = `privateCustomItems:${inventoryCustomId}/${inventoryKey}`;
   } catch (e) {
     // 폴백 시도
-    logger?.warn?.(
+    logger.warning(
       `[ValidateItemTradable] primary load failed. fallback will run. playerId=${playerId}, customId=${inventoryCustomId}, key=${inventoryKey}, err=${e?.message ?? e}`
     );
   }
@@ -75,8 +76,8 @@ module.exports = async ({ params, context, logger }) => {
   // (B) 컨테이너 키(예: key="items") 안에 배열/맵으로 저장된 경우 폴백
   if (!item && inventoryContainerKey) {
     try {
-      const res = await dataApi.getPrivateCustomItem(playerId, inventoryCustomId, inventoryContainerKey);
-      const container = res?.data?.value;
+      const res = await dataApi.getPrivateCustomItem(projectId, inventoryCustomId, [inventoryContainerKey]);
+      const container = res?.data?.results?.[0]?.value;
 
       if (Array.isArray(container)) {
         item = container.find(x => x?.instanceId === itemInstanceId || x?.id === itemInstanceId) ?? null;
@@ -85,12 +86,12 @@ module.exports = async ({ params, context, logger }) => {
       }
 
       loadPath = `privateCustomItemContainer:${inventoryCustomId}/${inventoryContainerKey}`;
-      logger?.warn?.(
+      logger.warning(
         `[ValidateItemTradable] fallback container load used. playerId=${playerId}, customId=${inventoryCustomId}, containerKey=${inventoryContainerKey}, itemInstanceId=${itemInstanceId}`
       );
     } catch (e) {
       // 폴백도 실패
-      logger?.warn?.(
+      logger.warning(
         `[ValidateItemTradable] fallback container load failed. playerId=${playerId}, customId=${inventoryCustomId}, containerKey=${inventoryContainerKey}, err=${e?.message ?? e}`
       );
     }
@@ -129,7 +130,7 @@ module.exports = async ({ params, context, logger }) => {
   let zone = item?.location?.zone ?? null;
   if (!zone) {
     zone = "BAG";
-    logger?.warn?.(
+    logger.warning(
       `[ValidateItemTradable] item.location.zone missing. fallback zone=BAG applied. playerId=${playerId}, itemInstanceId=${itemInstanceId}, kind=${kind}`
     );
   }
@@ -186,7 +187,7 @@ module.exports = async ({ params, context, logger }) => {
     if (untilIso) {
       const untilMs = Date.parse(untilIso);
       if (!Number.isNaN(untilMs) && untilMs <= nowMs) {
-        logger?.warn?.(
+        logger.warning(
           `[ValidateItemTradable] tradeLock expired but still locked. blocked. playerId=${playerId}, itemInstanceId=${itemInstanceId}, until=${untilIso}, now=${nowIso}, reason=${tradeLock.reason}`
         );
         return {
