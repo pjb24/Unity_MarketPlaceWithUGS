@@ -66,7 +66,7 @@ function _getZoneWithFallback(item, logger, playerId, itemInstanceId) {
   return zone;
 }
 
-function _validateTradableOrThrow({ item, kind, zone, expectedZone, allowKinds, playerId, itemInstanceId }) {
+function _validateTradableOrThrow({ item, kind, zone, expectedZone, allowKinds }) {
   if (!kind || typeof kind !== "string") {
     return { ok: false, code: E_EscrowMoveFail.INVALID_SCHEMA, msg: "missing item.kind" };
   }
@@ -184,8 +184,6 @@ module.exports = async ({ params, context, logger }) => {
     zone,
     expectedZone,
     allowKinds,
-    playerId,
-    itemInstanceId,
   });
 
   if (!valid.ok) {

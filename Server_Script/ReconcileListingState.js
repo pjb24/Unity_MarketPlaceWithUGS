@@ -12,7 +12,7 @@
  *   - setCustomItemBatch(projectId, customId, { data: [...] })로 최대 20개 원자적 배치 업데이트
  *
  * 안전 정책:
- * - 데이터가 불완전하면 "무음 폴백" 금지. 반드시 console.warn으로 원인/대상 키를 남기고 스킵/완화 처리한다.
+ * - 데이터가 불완전하면 "무음 폴백" 금지. 반드시 logger.warning으로 원인/대상 키를 남기고 스킵/완화 처리한다.
  * - SAFE 모드 기본: '소유권 이전' 같은 공격적 복구는 하지 않고, Listing 상태 정리 + Escrow tombstone만 수행한다.
  *
  * params (최대 10개):
@@ -49,7 +49,7 @@
 
 const { DataApi, Configuration } = require("@unity-services/cloud-save-1.4");
 
-module.exports = async function(params, context) {
+module.exports = async function({ params, context, logger }) {
   const listingsCustomId = (params.listingsCustomId || "market_listings").toString();
   const escrowCustomId = (params.escrowCustomId || "market_escrow").toString();
 
@@ -92,7 +92,7 @@ module.exports = async function(params, context) {
 
   function warn(msg) {
     warnings.push(msg);
-    console.warn(msg);
+    logger.warning(msg);
   }
 
   function parseIsoMs(iso, label, key) {

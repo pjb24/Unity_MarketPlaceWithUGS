@@ -40,7 +40,7 @@
 
 const { DataApi, Configuration } = require("@unity-services/cloud-save-1.4");
 
-module.exports = async function(params, context) {
+module.exports = async function({ params, context, logger }) {
   const listingsCustomId = (params.listingsCustomId || "market_listings").toString();
   const escrowCustomId = (params.escrowCustomId || "market_escrow").toString();
 
@@ -137,7 +137,7 @@ module.exports = async function(params, context) {
         skippedCount += 1;
         const msg = `[ExpireListingsBatch][WARN] Skip invalid listing item. key=${String(key)}`;
         warnings.push(msg);
-        console.warn(msg);
+        logger.warning(msg);
         continue;
       }
 
@@ -149,7 +149,7 @@ module.exports = async function(params, context) {
         skippedCount += 1;
         const msg = `[ExpireListingsBatch][WARN] ACTIVE listing missing expiresAt. listingKey=${key}`;
         warnings.push(msg);
-        console.warn(msg);
+        logger.warning(msg);
         continue;
       }
 
@@ -158,7 +158,7 @@ module.exports = async function(params, context) {
         skippedCount += 1;
         const msg = `[ExpireListingsBatch][WARN] ACTIVE listing has invalid expiresAt. listingKey=${key} expiresAt=${listing.expiresAt}`;
         warnings.push(msg);
-        console.warn(msg);
+        logger.warning(msg);
         continue;
       }
 
@@ -195,7 +195,7 @@ module.exports = async function(params, context) {
       } else {
         const msg = `[ExpireListingsBatch][WARN] Listing expired but missing escrowKey. listingKey=${key} listingId=${listing.listingId || "?"}`;
         warnings.push(msg);
-        console.warn(msg);
+        logger.warning(msg);
       }
 
       expiredCount += 1;

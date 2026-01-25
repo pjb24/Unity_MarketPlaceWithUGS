@@ -43,7 +43,7 @@
 
 const { DataApi, Configuration } = require("@unity-services/cloud-save-1.4");
 
-module.exports = async function(params, context) {
+module.exports = async function({ params, context, logger }) {
   const listingKey = params.listingKey ? params.listingKey.toString() : "";
   if (!listingKey) throw new Error("listingKey is required.");
 
@@ -68,7 +68,7 @@ module.exports = async function(params, context) {
 
   function warn(msg) {
     warnings.push(msg);
-    console.warn(msg);
+    logger.warning(msg);
   }
 
   const projectId = context.projectId;

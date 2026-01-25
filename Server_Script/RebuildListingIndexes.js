@@ -61,7 +61,7 @@
 
 const { DataApi, Configuration } = require("@unity-services/cloud-save-1.4");
 
-module.exports = async function(params, context) {
+module.exports = async function({ params, context, logger }) {
   const listingsCustomId = (params.listingsCustomId || "market_listings").toString();
   const indexCustomId = (params.indexCustomId || "market_indexes").toString();
 
@@ -88,7 +88,7 @@ module.exports = async function(params, context) {
 
   function warn(msg) {
     warnings.push(msg);
-    console.warn(msg);
+    logger.warning(msg);
   }
 
   const projectId = context.projectId;
