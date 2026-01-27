@@ -251,7 +251,18 @@ public class MarketHomeController : MonoBehaviour
         _infoPriceText.gameObject.SetActive(true);
         _infoFeeText.gameObject.SetActive(true);
 
-        _infoTitle.text = dto.listingId;
+        if (!_itemStaticDatabase.TryGet(dto.templateKey, out var staticEntry))
+        {
+            Debug.LogWarning($"[ItemUI] 아이템 메타 없음: {dto.templateKey}");
+            return;
+        }
+
+        if (staticEntry.Image)
+        {
+            _infoImage.sprite = staticEntry.Image;
+        }
+
+        _infoTitle.text = staticEntry.ItemName;
         // _infoImage
         _infoPrice.text = dto.price.ToString();
         _infoFee.text = (dto.price * 0.1f).ToString();
