@@ -11,10 +11,10 @@ using System.Threading.Tasks;
 using UnityEngine;
 
 using Unity.Services.Core;
-using Unity.Services.Authentication;
 using Unity.Services.CloudCode;
 using Unity.Services.CloudSave;
 using Unity.Services.CloudSave.Models;
+using UnityEngine.UI;
 
 public class TestGrantRandomItemController : MonoBehaviour
 {
@@ -24,23 +24,12 @@ public class TestGrantRandomItemController : MonoBehaviour
     private static readonly Regex _templateKeyRegex =
         new Regex(@"^(FRAG|EQ)_(WPN|ARM|ACC)_T(\d+)_(\d{3})$", RegexOptions.Compiled);
 
+    [SerializeField] private Button _btnGrantItem;
     [SerializeField] private bool _logVerbose = true;
 
     public enum E_Kind { FRAG, EQ }
     public enum E_Slot { WPN, ARM, ACC }
     public enum E_Rarity { COMMON, RARE, EPIC, LEGENDARY }
-
-    [Serializable]
-    private class ItemTemplateDto
-    {
-        public int schema;
-        public string kind;
-        public string slot;
-        public int tier;
-        public string rarity;
-
-        // 문서에 따라 item_templates 값에 templateKey가 없을 수도 있어서 key에서 파싱한다.
-    }
 
     [Serializable]
     public class GrantItemResponse
@@ -53,11 +42,22 @@ public class TestGrantRandomItemController : MonoBehaviour
         public string groupKey;
         public string instanceKey;
         public object instance;
+        public bool dryRun;
     }
 
     private async void Awake()
     {
         await EnsureSignedInAsync();
+    }
+
+    private void OnEnable()
+    {
+        if (_btnGrantItem != null) _btnGrantItem.onClick.AddListener(GrantOneTestItem);
+    }
+
+    private void OnDisable()
+    {
+        if (_btnGrantItem != null) _btnGrantItem.onClick.RemoveListener(GrantOneTestItem);
     }
 
     // UI 버튼에 연결
@@ -107,7 +107,7 @@ public class TestGrantRandomItemController : MonoBehaviour
             if (t < tierMin || t > tierMax) continue;
 
             // 2) rarity는 value에서 읽어서 필터
-            //    Item.Value는 GetAs<T>()로 역직렬화 가능 :contentReference[oaicite:1]{index=1}
+            //    Item.Value는 GetAs<T>()로 역직렬화 가능
             ItemTemplateDto dto;
             try
             {
@@ -147,6 +147,16 @@ public class TestGrantRandomItemController : MonoBehaviour
             Debug.Log($"[TestGrant] Picked templateKey={pick.TemplateKey} kind={pick.Kind} slot={pick.Slot} tier={pick.Tier} seq3={pick.Seq3:000} rarity={pick.Rarity}");
         }
 
+        ItemTemplateDto.PayloadDto payload;
+        if (pick.Kind == E_Kind.FRAG)
+        {
+            payload = CreateFragPayload(pick.Slot.ToString(), pick.Tier, pick.Rarity.ToString(), pick.TemplateKey);
+        }
+        else
+        {
+            payload = CreateEqPayload(pick.Slot.ToString(), pick.Tier, pick.Rarity.ToString(), pick.TemplateKey);
+        }
+
         // GrantItemInstanceToPlayer.js 파라미터 키와 100% 동일하게 보냄 (5개만 사용)
         var args = new Dictionary<string, object>
         {
@@ -155,11 +165,12 @@ public class TestGrantRandomItemController : MonoBehaviour
             { "tier", pick.Tier },
             { "seq3", pick.Seq3 },
             { "rarity", pick.Rarity.ToString() },
+            { "payload", payload }
         };
 
         try
         {
-            // Cloud Code Unity Runtime 호출 :contentReference[oaicite:2]{index=2}
+            // Cloud Code Unity Runtime 호출
             var res = await CloudCodeService.Instance.CallEndpointAsync<GrantItemResponse>(SCRIPT_GRANT_ITEM, args);
 
             if (res == null)
@@ -235,8 +246,284 @@ public class TestGrantRandomItemController : MonoBehaviour
     {
         if (UnityServices.State != ServicesInitializationState.Initialized)
             await UnityServices.InitializeAsync();
+    }
 
-        if (!AuthenticationService.Instance.IsSignedIn)
-            await AuthenticationService.Instance.SignInAnonymouslyAsync();
+    private ItemTemplateDto.PayloadDto CreateFragPayload(
+        string slot, int tier, string rarity,
+        string templateKey)
+    {
+        string nowIso = MarketHomeController.instance.Cache?.ServerTime.serverTime.iso;
+
+        return new ItemTemplateDto.PayloadDto
+        {
+            schema = 1,
+            kind = "FRAG",
+            slot = slot,
+            tier = tier,
+            rarity = rarity,
+
+            skillId = "",
+
+            flags = new ItemTemplateDto.FlagsDto
+            {
+                marketExpiredBonusEligible = false
+            },
+
+            lifecycle = new ItemTemplateDto.LifecycleDto
+            {
+                createdAt = nowIso,
+                createdBy = "GRANT",
+                updatedAt = nowIso
+            },
+
+            location = new ItemTemplateDto.LocationDto
+            {
+                note = null,
+                zone = "BAG"
+            },
+
+            market = new ItemTemplateDto.MarketDto
+            {
+                tradable = true,
+                tradeLock = new ItemTemplateDto.TradeLockDto
+                {
+                    isLocked = false,
+                    reason = null,
+                    until = null
+                }
+            },
+
+            proof = new ItemTemplateDto.ProofDto
+            {
+                buildHash = "BUILD_2026_01_26",
+                snapshotHash = "HASH_" + templateKey,
+            },
+
+            stats = new ItemTemplateDto.FragStatsDto
+            {
+                baseStats = new Dictionary<string, double>
+                {
+                    { "attack", 0 },
+                    { "critChance", 0f },
+                    { "critDamage", 0f },
+                    { "attackSpeed", 0f },
+                    { "defense", 0 },
+                    { "maxHp", 0 },
+                    { "evasion", 0 },
+                    { "cooldownReduction", 0 },
+                    { "resourceRegen", 0 }
+                },
+                potentialCaps = new Dictionary<string, double>
+                {
+                    { "attack", 0 },
+                    { "critChance", 0f },
+                    { "critDamage", 0f },
+                    { "attackSpeed", 0f },
+                    { "defense", 0 },
+                    { "maxHp", 0 },
+                    { "evasion", 0 },
+                    { "cooldownReduction", 0 },
+                    { "resourceRegen", 0 }
+                }
+            }
+        };
+    }
+
+    private ItemTemplateDto.PayloadDto CreateEqPayload(
+        string slot, int tier, string rarity,
+        string templateKey)
+    {
+        string nowIso = MarketHomeController.instance.Cache?.ServerTime.serverTime.iso;
+
+        return new ItemTemplateDto.PayloadDto
+        {
+            schema = 1,
+            kind = "EQ",
+            slot = slot,
+            tier = tier,
+            rarity = rarity,
+
+            flags = new ItemTemplateDto.FlagsDto
+            {
+                marketExpiredBonusEligible = false
+            },
+
+            lifecycle = new ItemTemplateDto.LifecycleDto
+            {
+                createdAt = nowIso,
+                createdBy = "GRANT",
+                updatedAt = nowIso
+            },
+
+            location = new ItemTemplateDto.LocationDto
+            {
+                note = null,
+                zone = "BAG"
+            },
+
+            market = new ItemTemplateDto.MarketDto
+            {
+                tradable = true,
+                tradeLock = new ItemTemplateDto.TradeLockDto
+                {
+                    isLocked = false,
+                    reason = null,
+                    until = null
+                }
+            },
+
+            proof = new ItemTemplateDto.ProofDto
+            {
+                buildHash = "BUILD_2026_01_26",
+                snapshotHash = "HASH_" + templateKey,
+            },
+
+            state = "NORMAL",
+
+            enhance = new ItemTemplateDto.EnhanceDto
+            {
+                level = 0,
+                maxLevelBeforeAwaken = 10
+            },
+
+            craft = new ItemTemplateDto.CraftDto
+            {
+                craftedAt = nowIso,
+                slots = new ItemTemplateDto.CraftSlotsDto
+                {
+                    core = "",
+                    free = new List<string>
+                    {
+                        "",
+                        ""
+                    }
+                },
+                sourceFragmentInstanceIds = new List<string>
+                {
+                    "",
+                    "",
+                    ""
+                }
+            },
+
+            awaken = new ItemTemplateDto.AwakenDto
+            {
+                effectHash = null,
+                effectId = "",
+                lockedAfterAwaken = true
+            },
+
+            expired = new ItemTemplateDto.ExpiredDto
+            {
+                appliesOnlyWhenStateIsExpired = true,
+                extraEffectHash = null,
+                extraEffectId = "",
+                mode = "ADD"
+            },
+
+            season = new ItemTemplateDto.SeasonDto
+            {
+                craftedSeason = "S1",
+                awakenedSeason = null,
+                expireAfterSeasons = 2,
+                expiredAtSeason = null,
+                recordEligibleState = "AWAKENED",
+                recordEligibleUntilSeason = null
+            },
+
+            seasonEffect = new ItemTemplateDto.SeasonEffectDto
+            {
+                applied = false,
+                appliedSeason = null,
+                hash = null,
+                modifiers = new Dictionary<string, double>
+                {
+
+                },
+                ruleSetId = ""
+            },
+
+            skill = new ItemTemplateDto.SkillChoiceDto
+            {
+                candidates = new List<string>
+                {
+                    "",
+                    "",
+                    ""
+                },
+                chosen = null,
+                chosenFromFragmentInstanceId = null,
+                locked = false,
+                selectedAt = null,
+                status = "PENDING"
+            },
+
+            nft = new ItemTemplateDto.NftDto
+            {
+                eligible = false,
+                tokenId = null
+            },
+
+            record = new ItemTemplateDto.RecordDto
+            {
+                eligible = false,
+                eligibleReason = "NOT_AWAKENED"
+            },
+
+            eqStats = new ItemTemplateDto.EqStatsDto
+            {
+                baseStats = new Dictionary<string, double>
+                {
+                    { "attack", 0 },
+                    { "bleedChance", 0 },
+                    { "critChance", 0 },
+                    { "critDamage", 0 },
+                    { "evasion", 0 },
+                    { "attackSpeed", 0 },
+                    { "defense", 0 },
+                    { "maxHp", 0 },
+                    { "damageReduce", 0 },
+                    { "resist", 0 },
+                    { "goldGain", 0 },
+                    { "luck", 0 },
+                    { "cooldownReduction", 0 },
+                    { "resourceRegen", 0 }
+                },
+                now = new Dictionary<string, double>
+                {
+                    { "attack", 0 },
+                    { "bleedChance", 0 },
+                    { "critChance", 0 },
+                    { "critDamage", 0 },
+                    { "evasion", 0 },
+                    { "attackSpeed", 0 },
+                    { "defense", 0 },
+                    { "maxHp", 0 },
+                    { "damageReduce", 0 },
+                    { "resist", 0 },
+                    { "goldGain", 0 },
+                    { "luck", 0 },
+                    { "cooldownReduction", 0 },
+                    { "resourceRegen", 0 }
+                },
+                awakenedFinal = new Dictionary<string, double>
+                {
+                    { "attack", 0 },
+                    { "bleedChance", 0 },
+                    { "critChance", 0 },
+                    { "critDamage", 0 },
+                    { "evasion", 0 },
+                    { "attackSpeed", 0 },
+                    { "defense", 0 },
+                    { "maxHp", 0 },
+                    { "damageReduce", 0 },
+                    { "resist", 0 },
+                    { "goldGain", 0 },
+                    { "luck", 0 },
+                    { "cooldownReduction", 0 },
+                    { "resourceRegen", 0 }
+                }
+            }
+        };
     }
 }

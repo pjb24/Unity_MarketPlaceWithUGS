@@ -1,218 +1,311 @@
 /**
- * GetTradeHistory (Cloud Code / UGS)
+ * GetTradeHistory (Cloud Code / UGS, Cloud Save v1.4 DataApi)
  *
  * 목적:
- * - 플레이어(구매자/판매자)의 거래 내역을 페이지 단위로 조회한다.
- * - Cloud Save는 서버 쿼리가 없으므로, "거래 이벤트 로그"를 Custom Item으로 저장해두고
- *   인덱스 키(Custom Item key)로 조회한다.
+ * - 내 거래 내역(구매/판매)을 페이지 단위로 조회한다.
+ * - Cloud Save Custom Item은 서버 “prefix list”가 없으므로,
+ *   DataApi.getCustomKeys()로 indexesCustomId 전체 키(알파벳 ASC, 100개 단위)를 받아오고
+ *   서버에서 keyPrefix(들)로 필터링해 “거래 인덱스 키”만 모은다.
+ * - 인덱스 키에서 tradeId를 추출한 뒤,
+ *   DataApi.getCustomItems()로 tradesCustomId의 TRADE_<tradeId>를 배치 조회한다.
+ * - 아이템 id(=itemInstanceId)는 prefix 금지.
+ * - 아이템 이동은 Custom Items 내부에서 customId 변경으로 수행(이 스크립트는 조회만 한다).
+ * - 경매장에 등록된 아이템은 customId="escrow"에 존재(필요 시 includeEscrowItem로 첨부 조회).
+ * - 데이터 불일치(인덱스는 있는데 trade가 없음, role 불일치 등)는 무음 폴백 금지:
+ *   Warning 로그를 남기고 해당 항목은 결과에서 제외한다(=부분 성공).
  *
- * 저장 규칙(전제: BuyListing / CancelListing 등에서 같이 기록해둬야 함):
- * - 트레이드 로그(Custom Items): customId="market_trades", key="TRADE_<tradeId>"
- * - 트레이드 인덱스(Custom Items): customId="market_trade_indexes"
- *   - 구매자 기준: IDX_TRADE_BUYER_<buyerPlayerId>_<yyyymmddhhmmss>_<tradeId>
- *   - 판매자 기준: IDX_TRADE_SELLER_<sellerPlayerId>_<yyyymmddhhmmss>_<tradeId>
+ * 데이터 저장 위치(기본값):
+ * - 거래 인덱스(Custom Items): customId = "market_indexes"
+ *   - 판매자 인덱스: IDX_TRADE_SELLER_<playerId>_<createdAtKey>_<tradeId>
+ *   - 구매자 인덱스: IDX_TRADE_BUYER_<playerId>_<createdAtKey>_<tradeId>
+ *   (createdAtKey는 문자열 정렬 가능한 형식 권장: yyyymmddhhmmss 등)
+ * - 거래 레코드(Custom Items): customId = "market_trades", key = "TRADE_<tradeId>"
+ * - 에스크로 아이템(Custom Items): customId = "escrow", key = "<itemInstanceId>"  // prefix 없음
  *
- * 정렬/페이지:
- * - listCustomItems는 key 오름차순만 보장한다.
- * - 최신순(DESC)을 완벽히 원하면 키에 "역정렬용 타임스탬프"를 넣어 설계해야 한다.
- * - 현재 구현은 order=DESC를 받으면 Warning 로그 후 ASC 기반 페이지를 반환한다(무음 폴백 금지).
- *
- * 불일치 처리:
- * - 인덱스는 있는데 TRADE 본문이 없으면 Warning 로그 후 제외(부분 성공).
+ * 페이지네이션 제약 (DataApi 기준):
+ * - getCustomKeys: customId 전체 키를 알파벳 ASC로만 제공(100개 단위).
+ * - 서버 prefix 필터가 없으므로, 원하는 prefix를 모을 때까지 여러 페이지를 스캔해야 한다.
  *
  * params (최대 10개):
  *  1) playerId: string (선택, 기본 context.playerId)
- *  2) role: "BUYER" | "SELLER" | "BOTH" (선택, 기본 "BOTH")
- *  3) order: "ASC" | "DESC" (선택, 기본 "ASC")
- *  4) pageSize: number (선택, 기본 20, 최대 50)
- *  5) pageToken: string (선택) // Cloud Save nextPageToken
- *  6) tradeIndexesCustomId: string (선택, 기본 "market_trade_indexes")
- *  7) tradesCustomId: string (선택, 기본 "market_trades")
+ *  2) role: "BUY" | "SELL" | "ALL" (선택, 기본 "ALL")
+ *  3) pageSize: number (선택, 기본 20, 최대 50)
+ *  4) pageToken: string (선택) // getCustomKeys(after)에 넣는 “after 키”
+ *  5) indexesCustomId: string (선택, 기본 "market_indexes")
+ *  6) tradesCustomId: string (선택, 기본 "market_trades")
+ *  7) escrowCustomId: string (선택, 기본 "escrow")
+ *  8) includeEscrowItem: boolean (선택, 기본 false)
  *
  * return:
- * - playerId, role, items: trade[], nextPageToken, skipped
+ * - ok=true: playerId, role, items: trade[], nextPageToken, skipped
+ *   (includeEscrowItem=true면 trade에 escrowItem 필드를 붙여 반환)
+ * - ok=false: errorCode, errorMessage
  */
 
 const { DataApi } = require("@unity-services/cloud-save-1.4");
 
-module.exports = async function GetTradeHistory(params, context, logger) {
+module.exports = async function GetTradeHistory({ params, context, logger }) {
+  try {
   const {
     playerId,
     role,
-    order,
     pageSize,
     pageToken,
-    tradeIndexesCustomId,
-    tradesCustomId
-  } = params || {};
+      indexesCustomId = "market_indexes",
+      tradesCustomId = "market_trades",
+      escrowCustomId = "escrow",
+      includeEscrowItem = false,
+    } = params ?? {};
 
-  const _playerId = playerId || context.playerId;
-  const _role = role || "BOTH";
-  const _order = order || "ASC";
+    const _playerId = (typeof playerId === "string" && playerId.length > 0) ? playerId : context.playerId;
+    const _role = (typeof role === "string" && role.length > 0) ? role : "ALL";
 
-  if (_role !== "BUYER" && _role !== "SELLER" && _role !== "BOTH") {
-    throw new Error("GetTradeHistory: role must be BUYER, SELLER, or BOTH.");
-  }
-  if (_order !== "ASC" && _order !== "DESC") {
-    throw new Error("GetTradeHistory: order must be ASC or DESC.");
+  if (_role !== "BUY" && _role !== "SELL" && _role !== "ALL") {
+      return fail("INVALID_ROLE", "role must be BUY, SELL, or ALL");
   }
 
   const _pageSizeRaw = (typeof pageSize === "number" && Number.isFinite(pageSize)) ? Math.floor(pageSize) : 20;
   const _pageSize = Math.max(1, Math.min(_pageSizeRaw, 50));
 
-  const _tradeIndexesCustomId = tradeIndexesCustomId || "market_trade_indexes";
-  const _tradesCustomId = tradesCustomId || "market_trades";
+    if (typeof indexesCustomId !== "string" || indexesCustomId.length === 0) return fail("INVALID_INDEXES_CUSTOM_ID", "indexesCustomId must be a string");
+    if (typeof tradesCustomId !== "string" || tradesCustomId.length === 0) return fail("INVALID_TRADES_CUSTOM_ID", "tradesCustomId must be a string");
+    if (typeof escrowCustomId !== "string" || escrowCustomId.length === 0) return fail("INVALID_ESCROW_CUSTOM_ID", "escrowCustomId must be a string");
+    if (typeof includeEscrowItem !== "boolean") return fail("INVALID_INCLUDE_ESCROW_ITEM", "includeEscrowItem must be a boolean");
+    if (pageToken != null && typeof pageToken !== "string") return fail("INVALID_PAGE_TOKEN", "pageToken must be a string when provided");
 
-  const cloudSave = new DataApi(context);
+    const api = new DataApi({ accessToken: context.accessToken });
   const projectId = context.projectId;
 
-  if (_order === "DESC") {
-    logger.warning("GetTradeHistory fallback: order=DESC requested but Cloud Save listCustomItems does not support reverse order. Returning ASC-based page.");
-  }
+  const prefixSeller = `IDX_TRADE_SELLER_${_playerId}_`;
+  const prefixBuyer = `IDX_TRADE_BUYER_${_playerId}_`;
 
-  // 1) 인덱스 keyPrefix 결정
-  // BOTH는 서버에서 prefix OR 조회가 불가하므로, 한 페이지 내에서 BUYER 우선으로만 조회하고,
-  // 다음 페이지 토큰으로 SELLER로 이어서 보는 방식(phase 토큰)을 사용한다.
-  // phaseToken 포맷: "B:<pageToken>" | "S:<pageToken>" | "BS:<buyerToken>|<sellerToken>" (호환용)
-  const parsePhaseToken = (t) => {
-    if (!t || typeof t !== "string") return { phase: (_role === "SELLER") ? "S" : "B", token: null };
+  const prefixes = (_role === "SELL")
+    ? [prefixSeller]
+    : (_role === "BUY")
+      ? [prefixBuyer]
+      : [prefixSeller, prefixBuyer];
 
-    if (t.startsWith("B:")) return { phase: "B", token: t.substring(2) || null };
-    if (t.startsWith("S:")) return { phase: "S", token: t.substring(2) || null };
+  // 1) 인덱스 키 수집 (getCustomKeys는 서버 prefix 필터 없음 -> 스캔)
+  const matchedIndexKeys = [];
+  let skipped = 0;
 
-    // 과거/혼합 토큰(사용 안 해도 됨) 호환
-    if (t.startsWith("BS:")) {
-      const body = t.substring(3);
-      const parts = body.split("|");
-      const b = parts[0] || null;
-      const s = parts[1] || null;
-      // BUYER부터 재개
-      return { phase: "B", token: b, otherToken: s };
+  let after = (typeof pageToken === "string" && pageToken.length > 0) ? pageToken : undefined;
+  let nextPageToken = null;
+
+  const MAX_KEY_PAGES_TO_SCAN = 20; // 20 * 100 = 2000 keys
+  let scannedPages = 0;
+
+  while (matchedIndexKeys.length < _pageSize && scannedPages < MAX_KEY_PAGES_TO_SCAN) {
+    scannedPages += 1;
+
+    let keysRes;
+    try {
+        keysRes = await api.getCustomKeys(projectId, indexesCustomId, after);
+    } catch (e) {
+        return fail("FAILED_GET_CUSTOM_KEYS", `getCustomKeys failed. err=${safeErrorMessage(e)}`);
     }
 
-    // 알 수 없는 토큰은 폴백 처리(Warning) 후 무시
-    logger.warning(`GetTradeHistory fallback: unknown pageToken format. token=${t}`);
-    return { phase: (_role === "SELLER") ? "S" : "B", token: null };
-  };
+    const rows = (keysRes?.data?.results || []);
+    if (rows.length === 0) {
+      nextPageToken = null;
+      break;
+    }
 
-  const phaseInfo = parsePhaseToken(pageToken);
+    const lastKey = rows[rows.length - 1]?.key;
+    if (typeof lastKey === "string" && lastKey.length > 0) {
+      nextPageToken = lastKey;
+    }
 
-  const wantBuyer = (_role === "BUYER" || _role === "BOTH");
-  const wantSeller = (_role === "SELLER" || _role === "BOTH");
+    for (const r of rows) {
+      const k = r?.key;
+      if (typeof k !== "string") continue;
 
-  let phase = phaseInfo.phase;
-  if (!wantBuyer && wantSeller) phase = "S";
-  if (wantBuyer && !wantSeller) phase = "B";
-  if (!wantBuyer && !wantSeller) throw new Error("GetTradeHistory: invalid role selection.");
+      let ok = false;
+      for (const p of prefixes) {
+        if (k.startsWith(p)) { ok = true; break; }
+      }
+      if (!ok) continue;
 
-  const buyerPrefix = `IDX_TRADE_BUYER_${_playerId}_`;
-  const sellerPrefix = `IDX_TRADE_SELLER_${_playerId}_`;
+      matchedIndexKeys.push(k);
+      if (matchedIndexKeys.length >= _pageSize) break;
+    }
 
-  const keyPrefix = (phase === "S") ? sellerPrefix : buyerPrefix;
-
-  // 2) 인덱스 페이지 조회
-  let indexRows = [];
-  let nextTokenRaw = null;
-
-  try {
-    const indexRes = await cloudSave.listCustomItems(projectId, _tradeIndexesCustomId, {
-      limit: _pageSize,
-      keyPrefix,
-      pageToken: (phaseInfo.token && typeof phaseInfo.token === "string") ? phaseInfo.token : undefined
-    });
-
-    indexRows = (indexRes?.data?.results || []);
-    nextTokenRaw = indexRes?.data?.nextPageToken || null;
-  } catch (e) {
-    throw new Error(`GetTradeHistory: failed to list trade index items. err=${e?.message || e}`);
+    after = (typeof lastKey === "string" && lastKey.length > 0) ? lastKey : undefined;
   }
 
-  // 3) tradeId 추출
-  const tradeIds = [];
-  for (const row of indexRows) {
-    const k = row?.key;
-    if (typeof k !== "string") continue;
+  if (scannedPages >= MAX_KEY_PAGES_TO_SCAN && matchedIndexKeys.length < _pageSize) {
+      logger.warning(`GetTradeHistory FALLBACK: scanned too many key pages without collecting enough index keys. scannedPages=${scannedPages}, collected=${matchedIndexKeys.length}`);
+  }
+
+  // 2) tradeId 추출 + (SELL/BUY) 역할도 같이 기록
+  const indexEntries = []; // { key, tradeId, kind:"SELL"|"BUY" }
+  for (const k of matchedIndexKeys) {
+    const kind = k.startsWith(prefixSeller) ? "SELL" : (k.startsWith(prefixBuyer) ? "BUY" : null);
+    if (!kind) {
+      skipped += 1;
+        logger.warning(`GetTradeHistory FALLBACK: index key prefix mismatch. key=${k}`);
+      continue;
+    }
 
     const lastUnderscore = k.lastIndexOf("_");
     if (lastUnderscore <= 0 || lastUnderscore === k.length - 1) {
-      logger.warning(`GetTradeHistory fallback: malformed index key. key=${k}`);
+      skipped += 1;
+        logger.warning(`GetTradeHistory FALLBACK: malformed index key. key=${k}`);
       continue;
     }
 
-    const id = k.substring(lastUnderscore + 1);
-    if (!id) {
-      logger.warning(`GetTradeHistory fallback: failed to parse tradeId. key=${k}`);
+    const tradeId = k.substring(lastUnderscore + 1);
+    if (!tradeId) {
+      skipped += 1;
+        logger.warning(`GetTradeHistory FALLBACK: failed to parse tradeId. key=${k}`);
       continue;
     }
 
-    tradeIds.push(id);
+    indexEntries.push({ key: k, tradeId, kind });
   }
 
-  // 4) TRADE 본문 배치 조회
-  const tradeKeys = tradeIds.map(id => `TRADE_${id}`);
+    const tradeKeys = indexEntries.map(x => `TRADE_${x.tradeId}`);
 
-  let tradeRows = [];
-  if (tradeKeys.length > 0) {
-    const tradeRes = await cloudSave.getCustomItems(projectId, _tradesCustomId, tradeKeys);
-    tradeRows = (tradeRes?.data?.results || []);
-  }
-
+  // 3) trade 레코드 배치 조회 (getCustomItems 20개 단위)
   const tradeMap = new Map();
-  for (const r of tradeRows) {
-    if (r && typeof r.key === "string") tradeMap.set(r.key, r.value);
+
+  const CHUNK = 20;
+  for (let i = 0; i < tradeKeys.length; i += CHUNK) {
+    const chunkKeys = tradeKeys.slice(i, i + CHUNK);
+
+    let res;
+    try {
+        res = await api.getCustomItems(projectId, tradesCustomId, chunkKeys);
+    } catch (e) {
+        return fail("FAILED_GET_TRADES", `getCustomItems(trades) failed. err=${safeErrorMessage(e)}`);
+    }
+
+    const rows = (res?.data?.results || []);
+    for (const r of rows) {
+      if (r && typeof r.key === "string") tradeMap.set(r.key, r.value);
+    }
   }
 
+  // 4) (옵션) escrow 아이템 배치 조회 준비
+  const escrowMap = new Map();
+    if (includeEscrowItem) {
+    const escrowIdSet = new Set();
+
+    for (const entry of indexEntries) {
+      const t = tradeMap.get(`TRADE_${entry.tradeId}`);
+        if (!isPlainObject(t)) continue;
+
+      const itemInstanceId = t.itemInstanceId;
+      if (typeof itemInstanceId === "string" && itemInstanceId.length > 0) {
+        escrowIdSet.add(itemInstanceId);
+      }
+    }
+
+    const escrowIds = Array.from(escrowIdSet);
+    for (let i = 0; i < escrowIds.length; i += CHUNK) {
+      const chunkKeys = escrowIds.slice(i, i + CHUNK);
+
+      let res;
+      try {
+          res = await api.getCustomItems(projectId, escrowCustomId, chunkKeys);
+      } catch (e) {
+          return fail("FAILED_GET_ESCROW", `getCustomItems(escrow) failed. err=${safeErrorMessage(e)}`);
+      }
+
+      const rows = (res?.data?.results || []);
+      for (const r of rows) {
+        if (r && typeof r.key === "string") escrowMap.set(r.key, r.value);
+      }
+    }
+  }
+
+  // 5) 결과 구성(인덱스 순서 유지) + 정합성 검증
   const items = [];
-  let skipped = 0;
 
-  for (const id of tradeIds) {
-    const tk = `TRADE_${id}`;
-    const v = tradeMap.get(tk);
+  for (const entry of indexEntries) {
+      const tradeKey = `TRADE_${entry.tradeId}`;
+      const t = tradeMap.get(tradeKey);
 
-    if (!v || typeof v !== "object") {
+      if (!isPlainObject(t)) {
       skipped += 1;
-      logger.warning(`GetTradeHistory fallback: trade missing for index. tradeKey=${tk}`);
+        logger.warning(`GetTradeHistory FALLBACK: trade missing for index. tradeKey=${tradeKey}`);
       continue;
     }
 
-    // 최소 검증(필드 없으면 경고 + 포함은 가능하지만, 여기선 운영 안정성 위해 제외)
-    if (!v.tradeId || v.tradeId !== id) {
+    // 인덱스 종류(SELL/BUY)와 레코드의 player 필드가 있으면 교차 검증 (있을 때만)
+    if (entry.kind === "SELL" && typeof t.sellerPlayerId === "string" && t.sellerPlayerId !== _playerId) {
       skipped += 1;
-      logger.warning(`GetTradeHistory fallback: tradeId mismatch. expected=${id}, got=${v.tradeId}`);
+        logger.warning(`GetTradeHistory FALLBACK: seller mismatch. tradeId=${entry.tradeId}, seller=${t.sellerPlayerId}, expected=${_playerId}`);
+      continue;
+    }
+    if (entry.kind === "BUY" && typeof t.buyerPlayerId === "string" && t.buyerPlayerId !== _playerId) {
+      skipped += 1;
+        logger.warning(`GetTradeHistory FALLBACK: buyer mismatch. tradeId=${entry.tradeId}, buyer=${t.buyerPlayerId}, expected=${_playerId}`);
       continue;
     }
 
-    items.push(v);
-  }
+      if (includeEscrowItem) {
+      const itemInstanceId = t.itemInstanceId;
 
-  // 5) nextPageToken 구성
-  // - role=BOTH: BUYER 페이지가 끝났고 nextTokenRaw가 null이면 SELLER phase로 넘긴다.
-  // - role=BUYER/SELLER: 해당 phase 그대로.
-  let nextPageToken = null;
-
-  if (_role === "BOTH") {
-    if (phase === "B") {
-      if (nextTokenRaw) {
-        nextPageToken = `B:${nextTokenRaw}`;
-      } else if (wantSeller) {
-        nextPageToken = "S:"; // SELLER 처음부터
+      if (typeof itemInstanceId === "string" && itemInstanceId.length > 0) {
+        const escrowItem = escrowMap.get(itemInstanceId);
+          if (!isPlainObject(escrowItem)) {
+            logger.warning(`GetTradeHistory FALLBACK: escrow item not found (may be moved out after completion). tradeId=${entry.tradeId}, itemInstanceId=${itemInstanceId}, escrowCustomId=${escrowCustomId}`);
+          items.push({ ...t, escrowItem: null });
+        } else {
+          items.push({ ...t, escrowItem });
+        }
       } else {
-        nextPageToken = null;
+          logger.warning(`GetTradeHistory FALLBACK: trade missing itemInstanceId while includeEscrowItem=true. tradeId=${entry.tradeId}`);
+        items.push({ ...t, escrowItem: null });
       }
     } else {
-      if (nextTokenRaw) nextPageToken = `S:${nextTokenRaw}`;
-      else nextPageToken = null;
+      items.push(t);
     }
-  } else {
-    if (nextTokenRaw) nextPageToken = `${phase}:${nextTokenRaw}`;
-    else nextPageToken = null;
   }
 
   return {
+      ok: true,
     playerId: _playerId,
     role: _role,
     items,
-    nextPageToken,
-    skipped
+    nextPageToken: nextPageToken || null,
+      skipped,
+    };
+  } catch (e) {
+    return fail("UNHANDLED_EXCEPTION", safeErrorMessage(e));
+  }
   };
+
+function fail(errorCode, errorMessage) {
+  return { ok: false, errorCode: String(errorCode), errorMessage: String(errorMessage) };
+}
+
+function isPlainObject(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+function safeErrorMessage(e) {
+  if (!e) return "unknown error";
+  if (typeof e === "string") return e;
+  const status = e?.response?.status ?? e?.status;
+  const detail = e?.response?.data?.detail ?? e?.response?.data?.message ?? e?.message;
+  if (status && detail) return `status=${status} ${detail}`;
+  if (detail) return String(detail);
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return "unstringifiable error";
+  }
+}
+
+module.exports.params = {
+  playerId: { type: "String", required: false },
+  role: { type: "String", required: false },
+  pageSize: { type: "Number", required: false },
+  pageToken: { type: "String", required: false },
+  indexesCustomId: { type: "String", required: false },
+  tradesCustomId: { type: "String", required: false },
+  escrowCustomId: { type: "String", required: false },
+  includeEscrowItem: { type: "Boolean", required: false },
 };

@@ -6,6 +6,7 @@ using UnityEngine;
 using Unity.Services.Core;
 using Unity.Services.Authentication;
 using Unity.Services.CloudCode;
+using Newtonsoft.Json.Linq;
 
 public class MarketEnterFlow : MonoBehaviour
 {
@@ -75,21 +76,25 @@ public class MarketEnterFlow : MonoBehaviour
         // 인벤 스냅샷은 지갑 포함 안 함(지갑은 GetWallet로 별도 조회)
         var invArgs = new Dictionary<string, object>
         {
-            { "includeFrags", true },
-            { "includeEqs", true },
-            { "includeWallet", false },
-            { "maxItems", 5000 }
+            // { "groupKey", "FRAG_WPN_T1" },
+            // { "kind", FRAG },
+            // { "slot", WPN },
+            // { "tier", 1 },
+            // { "maxItems", 5000 },
+            // { "maxKeysPerRequest", 100 },
+            // { "includeRaw", true },
         };
 
         var queryListingsArgs = new Dictionary<string, object>
         {
-            { "status", "ACTIVE" },            // QueryListings는 ACTIVE만 지원
-            { "sort", "CREATED_AT" },          // "CREATED_AT" | "PRICE"
-            { "order", "ASC" },                // "ASC" | "DESC" (DESC는 Warning 후 ASC 기반 반환)
-            { "pageSize", 20 },                // 1~50
-            { "pageToken", null },             // 다음 페이지면 string
+            // { "status", "ACTIVE" },            // QueryListings는 ACTIVE만 지원
+            // { "sort", "CREATED_AT" },          // "CREATED_AT" | "PRICE"
+            // { "order", "ASC" },                // "ASC" | "DESC" (DESC는 Warning 후 ASC 기반 반환)
+            // { "pageSize", 20 },                // 1~50
+            // { "pageToken", "" },             // 다음 페이지면 string
             // { "indexesCustomId", "market_indexes" },
-            // { "listingsCustomId", "market_listings" }
+            // { "listingsCustomId", "market_listings" },
+            // { "escrowCustomId", "escrow" }
         };
 
         var myListingsArgs = new Dictionary<string, object>
@@ -97,24 +102,26 @@ public class MarketEnterFlow : MonoBehaviour
             // { "sellerPlayerId", AuthenticationService.Instance.PlayerId }, // 생략하면 context.playerId
             { "status", "ACTIVE" },            // GetMyListings는 ACTIVE만 지원
             { "pageSize", 20 },
-            { "pageToken", null },
+            { "pageToken", "" },
             // { "indexesCustomId", "market_indexes" },
-            // { "listingsCustomId", "market_listings" }
+            // { "listingsCustomId", "market_listings" },
+            // { "escrowCustomId", "escrow" }
         };
 
         var tradeHistoryArgs = new Dictionary<string, object>
         {
-            // { "playerId", AuthenticationService.Instance.PlayerId }, // 생략하면 context.playerId
-            { "role", "BOTH" },                // "BUYER" | "SELLER" | "BOTH"
-            { "order", "ASC" },                // "ASC" | "DESC" (DESC는 Warning 후 ASC 기반)
-            { "pageSize", 20 },
-            { "pageToken", null },
-            // { "tradeIndexesCustomId", "market_trade_indexes" },
-            // { "tradesCustomId", "market_trades" }
+            // { "playerId", AuthenticationService.Instance.PlayerId },
+            // { "role", "" },                 // "BUY" | "SELL" | "ALL" (선택)
+            // { "pageSize", 20 },             // (선택) 기본 20, 최대 50 (서버에서 clamp)
+            // { "pageToken", "" },            // (선택) getCustomKeys(after)에 들어가는 after key
+            // { "indexesCustomId", "" },      // (선택) 기본 "market_indexes"
+            // { "tradesCustomId", "" },       // (선택) 기본 "market_trades"
+            // { "escrowCustomId", "" },       // (선택) 기본 "escrow"
+            // { "includeEscrowItem", "" },    // (선택) escrow 아이템 첨부 조회 여부
         };
 
         var walletTask = TryCallAsync<GetWalletResult>(EP_GetWallet, walletArgs, ct);
-        var invTask = TryCallAsync<GetInventorySnapshotResult>(EP_GetInventorySnapshot, invArgs, ct);
+        var invTask = TryCallAsync<GetInventorySnapshotResponseDto>(EP_GetInventorySnapshot, invArgs, ct);
         var listingsTask = TryCallAsync<QueryListingsResult>(EP_QueryListings, queryListingsArgs, ct);
         var myListingsTask = TryCallAsync<GetMyListingsResult>(EP_GetMyListings, myListingsArgs, ct);
         var tradeTask = TryCallAsync<GetTradeHistoryResult>(EP_GetTradeHistory, tradeHistoryArgs, ct);
@@ -251,7 +258,7 @@ public class MarketEnterFlow : MonoBehaviour
             {
                 playerId = AuthenticationService.Instance.PlayerId,
                 role = role,
-                items = new List<TradeDto>(),
+                items = new List<TradeRecordDto>(),
                 nextPageToken = null,
                 skipped = 0
             };
@@ -276,7 +283,7 @@ public class MarketEnterFlow : MonoBehaviour
         {
             playerId = string.IsNullOrEmpty(playerId) ? AuthenticationService.Instance.PlayerId : playerId,
             role = role,
-            items = new List<TradeDto>(),
+            items = new List<TradeRecordDto>(),
             nextPageToken = null,
             skipped = 0
         };
@@ -367,19 +374,44 @@ public class MarketEnterFlow : MonoBehaviour
         };
     }
 
-    private GetInventorySnapshotResult MakeEmptyInventorySnapshot()
+    private GetInventorySnapshotResponseDto MakeEmptyInventorySnapshot()
     {
-        return new GetInventorySnapshotResult
+        return new GetInventorySnapshotResponseDto
         {
-            customId = "inventory",
-            keys = new List<string>(),
-            nowIso = DateTime.UtcNow.ToString("o"),
-            nowEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            snapshot = new SnapshotDto { frags = null, eqs = null, wallet = null },
-            view = new SnapshotViewDto { frags = new List<MarketViewItemDto>(), eqs = new List<MarketViewItemDto>() },
-            counts = new CountsDto { frags = 0, eqs = 0, total = 0 },
+            ok = false,
+
+            errorCode = null,
+            errorMessage = null,
+
+            scope = "PROTECTED_PLAYER_DATA",
+            indexKeyUsed = null,
+            groupKeyUsed = null,
+
+            nowIso = null,
+            nowEpochMs = 0,
+
+            instanceKeys = new List<string>(),
+
+            snapshot = new InventorySnapshotSnapshotDto
+            {
+                instances = new List<JToken>()
+            },
+
+            view = new InventorySnapshotViewDto
+            {
+                instances = new List<InventorySnapshotViewInstanceDto>()
+            },
+
+            counts = new InventorySnapshotCountsDto
+            {
+                indexed = 0,
+                selected = 0,
+                loaded = 0,
+                missing = 0
+            },
+
             snapshotHash32 = 0,
-            snapshotHashHex = "00000000"
+            snapshotHashHex = null
         };
     }
 
@@ -411,7 +443,7 @@ public class MarketEnterFlow : MonoBehaviour
         {
             playerId = playerId,
             role = "BOTH",
-            items = new List<TradeDto>(),
+            items = new List<TradeRecordDto>(),
             nextPageToken = null,
             skipped = 0
         };

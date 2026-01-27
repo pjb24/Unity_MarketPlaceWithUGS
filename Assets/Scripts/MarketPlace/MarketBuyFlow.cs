@@ -20,19 +20,23 @@ public sealed class MarketBuyFlow
 
     public sealed class BuyRequest
     {
-        public string ListingId;
+        // required
+        public string listingId;
 
-        // BuyListing params
-        public string BuyerPlayerId;            // optional (default context.playerId)
-        public string ReturnZone;               // "BAG" | "STORAGE" (optional)
-        public string CurrencyId;               // optional (default "MARKETTOKEN")
-        public int? FeeBps;                     // optional (default 0)
-        public string FeeReceiverPlayerId;      // optional (if null => burn)
+        // optional (override customIds)
+        public string listingsCustomId;   // default: "market_listings"
+        public string indexesCustomId;    // default: "market_indexes"
+        public string escrowCustomId;     // default: "escrow"
+        public string tradesCustomId;     // default: "market_trades"
+        public string proceedsCustomId;   // default: "market_proceeds"
+        public string lockCustomId;       // default: "txnlocks"
 
-        public string InventoryCustomId;        // optional (default "inventory")
-        public string ListingsCustomId;         // optional (default "market_listings")
-        public string EscrowCustomId;           // optional (default "market_escrow")
-        public string IndexesCustomId;          // optional (default "market_indexes")
+        // optional
+        public double requirePrice;       // when used, requirePriceEnabled=true
+        public bool requirePriceEnabled;  // Unity JsonUtility는 nullable 미지원이라 플래그로 처리
+
+        public int ttlSeconds;            // default: 10
+        public bool dryRun;               // default: false
     }
 
     public sealed class BuyResult
@@ -47,33 +51,17 @@ public sealed class MarketBuyFlow
     public async Task<BuyResult> BuyAsync(BuyRequest req, CancellationToken ct)
     {
         if (req == null) throw new ArgumentNullException(nameof(req));
-        if (string.IsNullOrEmpty(req.ListingId)) throw new ArgumentException("ListingId is required.");
+        if (string.IsNullOrEmpty(req.listingId)) throw new ArgumentException("ListingId is required.");
 
         if (!AuthenticationService.Instance.IsSignedIn)
             throw new InvalidOperationException("Not signed in. Authenticate first.");
 
         var buyerId = AuthenticationService.Instance.PlayerId;
 
-        // buyerPlayerId는 서버가 context.playerId와 동일해야 통과한다. (BuyListing.js 검증)
-        if (!string.IsNullOrEmpty(req.BuyerPlayerId) && req.BuyerPlayerId != buyerId)
-            throw new ArgumentException("BuyerPlayerId must match signed-in PlayerId.");
-
         var args = new Dictionary<string, object>
         {
-            { "listingId", req.ListingId }
+            { "listingId", req.listingId }
         };
-
-        if (!string.IsNullOrEmpty(req.BuyerPlayerId)) args["buyerPlayerId"] = req.BuyerPlayerId;
-        if (!string.IsNullOrEmpty(req.ReturnZone)) args["returnZone"] = req.ReturnZone;
-        if (!string.IsNullOrEmpty(req.CurrencyId)) args["currencyId"] = req.CurrencyId;
-
-        if (req.FeeBps.HasValue) args["feeBps"] = req.FeeBps.Value;
-        if (!string.IsNullOrEmpty(req.FeeReceiverPlayerId)) args["feeReceiverPlayerId"] = req.FeeReceiverPlayerId;
-
-        if (!string.IsNullOrEmpty(req.InventoryCustomId)) args["inventoryCustomId"] = req.InventoryCustomId;
-        if (!string.IsNullOrEmpty(req.ListingsCustomId)) args["listingsCustomId"] = req.ListingsCustomId;
-        if (!string.IsNullOrEmpty(req.EscrowCustomId)) args["escrowCustomId"] = req.EscrowCustomId;
-        if (!string.IsNullOrEmpty(req.IndexesCustomId)) args["indexesCustomId"] = req.IndexesCustomId;
 
         try
         {

@@ -47,6 +47,26 @@ public class InventoryRowUI : MonoBehaviour
         }
     }
 
+    public void Bind(
+        InventorySnapshotViewInstanceDto item)
+    {
+        // ★ 디버그: 전달받은 값 확인
+        Debug.Log($"[InventoryRowUI.Bind] InventoryItemId: {item.id}");
+        Debug.Log($"[InventoryRowUI.Bind] PlayersInventoryItemId: {item.id}");
+
+        playersInventoryItemId = item.id;
+
+        if (titleText != null) titleText.text = item.id;
+
+        string shortInstance = !string.IsNullOrEmpty(playersInventoryItemId) && playersInventoryItemId.Length > 8
+            ? playersInventoryItemId.Substring(0, 8)
+            : playersInventoryItemId ?? "(null)";
+
+        if (instanceText != null) instanceText.text = $"instance: {shortInstance}";
+
+        if (optionText != null) optionText.text = "option: -";
+    }
+
     private async Task SellAsync()
     {
         // ★ 디버그: Sell 시점에 ID 확인

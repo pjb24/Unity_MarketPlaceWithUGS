@@ -87,6 +87,7 @@ module.exports = async ({ params, context, logger }) => {
 
   // ---- escrowKey 규칙 ----
   let escrowKey = null;
+  let escrowWriteLock = null;
   if (listingId) {
     escrowKey = `ESCROW_${listingId}`;
   } else {
@@ -98,7 +99,6 @@ module.exports = async ({ params, context, logger }) => {
 
   // ---------- 1) 에스크로 로드 ----------
   let escrow = null;
-  let escrowWriteLock = null;
   try {
     const res = await dataApi.getCustomItems(projectId, escrowCustomId, [escrowKey]);
     const row = res?.data?.results?.[0] ?? null;

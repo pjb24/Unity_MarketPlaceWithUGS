@@ -38,7 +38,7 @@ async function _fetchAllCurrencyBalances(currenciesApi, projectId, playerId) {
   // getPlayerCurrencies는 currencyId 오름차순, after/limit 기반 페이징.
   const results = [];
   let after = undefined;
-  const limit = 200; // 기본 20이므로 크게 잡고, 그래도 부족하면 after로 반복
+  const limit = 100; // 기본 20이므로 크게 잡고, 그래도 부족하면 after로 반복
 
   for (;;) {
     const res = await currenciesApi.getPlayerCurrencies({

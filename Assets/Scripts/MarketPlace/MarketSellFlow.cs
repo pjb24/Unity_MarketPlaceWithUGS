@@ -27,7 +27,7 @@ public class MarketSellFlow
         public string IndexesCustomId;      // default "market_indexes"
 
         public bool WriteAuditLedger;       // delta=0 ledger 남길지 여부
-        public string MtCurrencyId;         // WriteLedgerEntry에 넣을 currencyId (예: "MT")
+        public string MtCurrencyId;         // WriteLedgerEntry에 넣을 currencyId (예: "MARKETTOKEN")
     }
 
     public sealed class SellResult
@@ -76,14 +76,17 @@ public class MarketSellFlow
                 new Dictionary<string, object>
                 {
                     { "itemInstanceId", req.ItemInstanceId },
-                    { "playerId", sellerPlayerId },
-                    { "expectedZone", "BAG" },
 
                     // 필요 시 커스텀 가능(서버 기본값이 있으니 보통 생략 가능)
+                    // { "storage", "INVENTORY" }, "INVENTORY" | "ESCROW"
+                    // { "playerId", sellerPlayerId },
+                    // { "inventoryProjectId", "" },
+                    // { "marketOwnerPlayerId", "MARKET" },
+                    // { "escrowCustomId", "escrow" },
                     // { "allowKinds", new [] { "FRAG", "EQ" } },
-                    // { "inventoryCustomId", req.InventoryCustomId ?? "inventory" },
-                    // { "inventoryKey", req.ItemInstanceId },
-                    // { "inventoryContainerKey", null },
+                    // { "requireMarketTradable", true },
+                    // { "requireUnlocked", true },
+                    // { "expectedZone", null },
                 },
                 ct
             );
@@ -94,7 +97,7 @@ public class MarketSellFlow
                 {
                     Ok = false,
                     FailStep = "VALIDATE",
-                    FailMessage = $"ValidateItemTradable failed. reasonCode={validate.reasonCode}",
+                    FailMessage = $"ValidateItemTradable failed. reasonCode={validate.details}",
                     Lock = lockRes,
                     Validate = validate
                 };
@@ -106,11 +109,11 @@ public class MarketSellFlow
             var createArgs = new Dictionary<string, object>
             {
                 { "itemInstanceId", req.ItemInstanceId },
-                { "price", req.Price }
+                { "price", req.Price },
+                { "currencyId", "MARKETTOKEN" }
             };
 
             if (req.ExpiresInSeconds.HasValue) createArgs["expiresInSeconds"] = req.ExpiresInSeconds.Value;
-            if (!string.IsNullOrEmpty(req.InventoryCustomId)) createArgs["inventoryCustomId"] = req.InventoryCustomId;
             if (!string.IsNullOrEmpty(req.ListingsCustomId)) createArgs["listingsCustomId"] = req.ListingsCustomId;
             if (!string.IsNullOrEmpty(req.EscrowCustomId)) createArgs["escrowCustomId"] = req.EscrowCustomId;
             if (!string.IsNullOrEmpty(req.IndexesCustomId)) createArgs["indexesCustomId"] = req.IndexesCustomId;
@@ -150,7 +153,7 @@ public class MarketSellFlow
                                 {
                                     { "itemInstanceId", req.ItemInstanceId },
                                     { "price", req.Price },
-                                    { "expiresAt", listing.expiresAt }
+                                    { "expiresAt", listing.listing.expiresAt }
                                 }
                             }
                         },

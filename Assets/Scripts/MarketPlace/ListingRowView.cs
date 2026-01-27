@@ -1,13 +1,16 @@
+using Newtonsoft.Json.Linq;
 using System;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using static UnityEngine.Rendering.DebugUI.Table;
 
 /// <summary>
 /// ListingRowView
 ///
 /// 목적:
 /// - MarketHomeController가 재사용하는 단일 Row 프리팹 뷰.
-/// - Listing / Trade를 같은 Row로 표시할 수 있게 두 바인딩 함수를 제공.
+/// - Listing / Sell / History를 같은 Row로 표시할 수 있게 세 바인딩 함수를 제공.
 /// - 클릭 이벤트는 외부에 event로 노출하지 않고 AddListener/RemoveListener 패턴만 제공.
 /// - 폴백 로직이 동작하면 Warning 로그로 명확히 알림.
 /// </summary>
@@ -15,9 +18,10 @@ public class ListingRowView : MonoBehaviour
 {
     [Header("Common UI")]
     [SerializeField] private Button _button;
-    [SerializeField] private Text _title;
-    [SerializeField] private Text _sub;
-    [SerializeField] private Text _right;
+    [SerializeField] private Image _image;
+    [SerializeField] private TextMeshProUGUI _title;
+    [SerializeField] private TextMeshProUGUI _itemId;
+    [SerializeField] private TextMeshProUGUI _instanceId;
 
     private Action _onClick;
 
@@ -62,13 +66,13 @@ public class ListingRowView : MonoBehaviour
         // Sub  : itemInstanceId / seller
         // Right: price + status
         var title = Safe(dto.listingId);
-        var sub = $"item={Safe(dto.itemInstanceId)}  seller={Safe(dto.sellerPlayerId)}";
+        var sub = $"item={Safe(dto.itemInstanceId)}";
         var right = $"{dto.price:N0}  {Safe(dto.status)}";
 
         SetTexts(title, sub, right);
     }
 
-    public void BindTrade(TradeDto dto)
+    public void BindTrade(TradeRecordDto dto)
     {
         if (dto == null)
         {
@@ -83,7 +87,50 @@ public class ListingRowView : MonoBehaviour
         // Right: price + fee + status
         var title = Safe(dto.tradeId);
         var sub = $"listing={Safe(dto.listingId)}  buyer={Safe(dto.buyerPlayerId)}  seller={Safe(dto.sellerPlayerId)}";
-        var right = $"{dto.price:N0} (fee {dto.feeTotal:N0})  {Safe(dto.status)}";
+        var right = $"{dto.price:N0} (fee {(dto.price * 0.1f):N0})";
+
+        SetTexts(title, sub, right);
+    }
+
+    public void BindSell(JToken dto)
+    {
+        if (dto == null)
+        {
+            Debug.LogWarning("[ListingRowView] BindSell fallback 발생: dto is null");
+            SetTexts("-", "-", "-");
+            return;
+        }
+
+        if (SnapshotInstanceDeserializer.TryDeserializeFrag(dto, out var frag))
+        {
+            // FRAG 사용
+        }
+
+        if (SnapshotInstanceDeserializer.TryDeserializeEq(dto, out var eq))
+        {
+            // EQ 사용
+        }
+
+        string groupKey = "";
+        string instanceId = "";
+        string tradable = "";
+        if (frag != null)
+        {
+            groupKey = frag.groupKey;
+            instanceId = frag.instanceId;
+            tradable = frag.payload?.market?.tradable.ToString();
+        }
+
+        if (eq != null)
+        {
+            groupKey = eq.groupKey;
+            instanceId = eq.instanceId;
+            tradable = eq.payload?.market?.tradable.ToString();
+        }
+
+        var title = Safe(groupKey);
+        var sub = $"instanceId={instanceId}";
+        var right = $"tradable={tradable}";
 
         SetTexts(title, sub, right);
     }
@@ -93,11 +140,11 @@ public class ListingRowView : MonoBehaviour
         _onClick?.Invoke();
     }
 
-    private void SetTexts(string title, string sub, string right)
+    private void SetTexts(string title, string itemId, string instanceId)
     {
         if (_title != null) _title.text = title;
-        if (_sub != null) _sub.text = sub;
-        if (_right != null) _right.text = right;
+        if (_itemId != null) _itemId.text = itemId;
+        if (_instanceId != null) _instanceId.text = instanceId;
     }
 
     private static string Safe(string s) => string.IsNullOrEmpty(s) ? "-" : s;

@@ -6,12 +6,20 @@
 using System;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using UnityEngine;
-using Unity.Services.Core;
+using TMPro;
 using Unity.Services.Authentication;
+using Unity.Services.Core;
+using UnityEngine;
+using UnityEngine.UI;
 
 public class UgsAuthUsernamePassword : MonoBehaviour
 {
+    [SerializeField] private TMP_InputField inputID;
+    [SerializeField] private TMP_InputField inputPW;
+    [SerializeField] private Button loginBtn;
+    [SerializeField] private Button siginUpBtn;
+    [SerializeField] private TextMeshProUGUI debugLine;
+
     public enum E_AuthState
     {
         None = 0,
@@ -40,6 +48,18 @@ public class UgsAuthUsernamePassword : MonoBehaviour
         await InitializeAsync();
     }
 
+    private void OnEnable()
+    {
+        if (loginBtn != null) loginBtn.onClick.AddListener(OnClickSignIn);
+        if (siginUpBtn != null) siginUpBtn.onClick.AddListener(OnClickSignUp);
+    }
+
+    private void OnDisable()
+    {
+        if (loginBtn != null) loginBtn.onClick.RemoveListener(OnClickSignIn);
+        if (siginUpBtn != null) siginUpBtn.onClick.RemoveListener(OnClickSignUp);
+    }
+
     public async Task InitializeAsync()
     {
         if (_state != E_AuthState.None && _state != E_AuthState.Error)
@@ -55,6 +75,7 @@ public class UgsAuthUsernamePassword : MonoBehaviour
         catch (Exception ex)
         {
             _state = E_AuthState.Error;
+            debugLine.text = $"[UGS][Auth] Initialize failed: {ex}";
             Debug.LogError($"[UGS][Auth] Initialize failed: {ex}");
         }
     }
@@ -62,17 +83,27 @@ public class UgsAuthUsernamePassword : MonoBehaviour
     /// <summary>
     /// Unity UI Button OnClick에 연결용.
     /// </summary>
-    public async void OnClickSignUp(string username, string password)
+    public async void OnClickSignUp()
     {
-        await SignUpAsync(username, password);
+        await SignUpAsync(inputID.text, inputPW.text);
+
+        if (_state == E_AuthState.SignedIn)
+        {
+            UIController.instance.UIUpdateOnLogin();
+        }
     }
 
     /// <summary>
     /// Unity UI Button OnClick에 연결용.
     /// </summary>
-    public async void OnClickSignIn(string username, string password)
+    public async void OnClickSignIn()
     {
-        await SignInAsync(username, password);
+        await SignInAsync(inputID.text, inputPW.text);
+
+        if (_state == E_AuthState.SignedIn)
+        {
+            UIController.instance.UIUpdateOnLogin();
+        }
     }
 
     public void SignOut(bool clearCredentials = false)
@@ -82,6 +113,7 @@ public class UgsAuthUsernamePassword : MonoBehaviour
 
         AuthenticationService.Instance.SignOut(clearCredentials); // clearCredentials=true면 세션 토큰도 제거
         _state = E_AuthState.SignedOut;
+        debugLine.text = $"[UGS][Auth] Signed out. clearCredentials={clearCredentials}";
         Debug.Log($"[UGS][Auth] Signed out. clearCredentials={clearCredentials}");
     }
 
@@ -92,12 +124,14 @@ public class UgsAuthUsernamePassword : MonoBehaviour
 
         if (!ValidateInputs(username, password, out var reason))
         {
+            debugLine.text = $"[UGS][Auth] SignUp blocked: {reason}";
             Debug.LogWarning($"[UGS][Auth] SignUp blocked: {reason}");
             return;
         }
 
         if (AuthenticationService.Instance.IsSignedIn)
         {
+            debugLine.text = "[UGS][Auth] SignUp blocked: already signed in. SignOut first.";
             Debug.LogWarning("[UGS][Auth] SignUp blocked: already signed in. SignOut first.");
             return;
         }
@@ -108,21 +142,25 @@ public class UgsAuthUsernamePassword : MonoBehaviour
         {
             await AuthenticationService.Instance.SignUpWithUsernamePasswordAsync(username, password);
             _state = E_AuthState.SignedIn;
+            debugLine.text = $"[UGS][Auth] SignUp success. PlayerId={AuthenticationService.Instance.PlayerId}";
             Debug.Log($"[UGS][Auth] SignUp success. PlayerId={AuthenticationService.Instance.PlayerId}");
         }
         catch (AuthenticationException ex)
         {
             _state = E_AuthState.Error;
+            debugLine.text = $"[UGS][Auth] SignUp failed. ErrorCode={ex.ErrorCode} Message={ex.Message}\n{ex}";
             Debug.LogError($"[UGS][Auth] SignUp failed. ErrorCode={ex.ErrorCode} Message={ex.Message}\n{ex}");
         }
         catch (RequestFailedException ex)
         {
             _state = E_AuthState.Error;
+            debugLine.text = $"[UGS][Auth] SignUp request failed. ErrorCode={ex.ErrorCode} Message={ex.Message}\n{ex}";
             Debug.LogError($"[UGS][Auth] SignUp request failed. ErrorCode={ex.ErrorCode} Message={ex.Message}\n{ex}");
         }
         catch (Exception ex)
         {
             _state = E_AuthState.Error;
+            debugLine.text = $"[UGS][Auth] SignUp failed: {ex}";
             Debug.LogError($"[UGS][Auth] SignUp failed: {ex}");
         }
     }
@@ -134,12 +172,14 @@ public class UgsAuthUsernamePassword : MonoBehaviour
 
         if (!ValidateInputs(username, password, out var reason))
         {
+            debugLine.text = $"[UGS][Auth] SignIn blocked: {reason}";
             Debug.LogWarning($"[UGS][Auth] SignIn blocked: {reason}");
             return;
         }
 
         if (AuthenticationService.Instance.IsSignedIn)
         {
+            debugLine.text = "[UGS][Auth] SignIn blocked: already signed in. SignOut first.";
             Debug.LogWarning("[UGS][Auth] SignIn blocked: already signed in. SignOut first.");
             return;
         }
@@ -150,21 +190,25 @@ public class UgsAuthUsernamePassword : MonoBehaviour
         {
             await AuthenticationService.Instance.SignInWithUsernamePasswordAsync(username, password);
             _state = E_AuthState.SignedIn;
+            debugLine.text = $"[UGS][Auth] SignIn success. PlayerId={AuthenticationService.Instance.PlayerId}";
             Debug.Log($"[UGS][Auth] SignIn success. PlayerId={AuthenticationService.Instance.PlayerId}");
         }
         catch (AuthenticationException ex)
         {
             _state = E_AuthState.Error;
+            debugLine.text = $"[UGS][Auth] SignIn failed. ErrorCode={ex.ErrorCode} Message={ex.Message}\n{ex}";
             Debug.LogError($"[UGS][Auth] SignIn failed. ErrorCode={ex.ErrorCode} Message={ex.Message}\n{ex}");
         }
         catch (RequestFailedException ex)
         {
             _state = E_AuthState.Error;
+            debugLine.text = $"[UGS][Auth] SignIn request failed. ErrorCode={ex.ErrorCode} Message={ex.Message}\n{ex}";
             Debug.LogError($"[UGS][Auth] SignIn request failed. ErrorCode={ex.ErrorCode} Message={ex.Message}\n{ex}");
         }
         catch (Exception ex)
         {
             _state = E_AuthState.Error;
+            debugLine.text = $"[UGS][Auth] SignIn failed: {ex}";
             Debug.LogError($"[UGS][Auth] SignIn failed: {ex}");
         }
     }
@@ -173,6 +217,7 @@ public class UgsAuthUsernamePassword : MonoBehaviour
     {
         if (UnityServices.State != ServicesInitializationState.Initialized)
         {
+            debugLine.text = "[UGS][Auth] Not initialized. Call InitializeAsync first. (fallback 발생)";
             Debug.LogWarning("[UGS][Auth] Not initialized. Call InitializeAsync first. (fallback 발생)");
             return false;
         }

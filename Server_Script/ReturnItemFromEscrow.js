@@ -251,9 +251,9 @@ module.exports = async ({ params, context, logger }) => {
 
   // ---------- 6) 저장 순서: (A) 인벤 write → (B) escrow tombstone ----------
   try {
-    await dataApi.setPrivateCustomItem(projectId, inventoryCustomId, { key: inventoryKey, value: nextItem});
+    await dataApi.setPrivateCustomItem(projectId, inventoryCustomId, { key: inventoryKey, value: nextItem });
   } catch (e) {
-    llogger.warning(
+    logger.warning(
       `[ReturnItemFromEscrow] inventory write failed. sellerPlayerId=${sellerPlayerId}, customId=${inventoryCustomId}, key=${inventoryKey}, err=${e?.message ?? e}`
     );
     return {

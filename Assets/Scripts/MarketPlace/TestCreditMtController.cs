@@ -7,18 +7,19 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
-
 using Unity.Services.Core;
-using Unity.Services.Authentication;
 using Unity.Services.CloudCode;
+using UnityEngine.UI;
 
 public class TestCreditMtController : MonoBehaviour
 {
     private const string SCRIPT_NAME = "CreditCurrency";
-    private const string CURRENCY_ID_MT = "MT";
+    private const string CURRENCY_ID_MT = "MARKETTOKEN";
     private const string TOKEN_TYPE_SERVICE = "SERVICE";
 
     [Header("Test Grant Settings")]
+    [SerializeField] private Button _btnAddCredit;
+
     [SerializeField]
     [Tooltip("테스트용 MT 지급량 (1 ~ 100000)")]
     private long _grantAmount = 100;
@@ -102,6 +103,16 @@ public class TestCreditMtController : MonoBehaviour
     private async void Awake()
     {
         await EnsureSignedInAsync();
+    }
+
+    private void OnEnable()
+    {
+        if (_btnAddCredit != null) _btnAddCredit.onClick.AddListener(CreditMt_FromInspector);
+    }
+
+    private void OnDisable()
+    {
+        if (_btnAddCredit != null) _btnAddCredit.onClick.RemoveListener(CreditMt_FromInspector);
     }
 
     /// <summary>
@@ -201,8 +212,5 @@ public class TestCreditMtController : MonoBehaviour
     {
         if (UnityServices.State != ServicesInitializationState.Initialized)
             await UnityServices.InitializeAsync();
-
-        if (!AuthenticationService.Instance.IsSignedIn)
-            await AuthenticationService.Instance.SignInAnonymouslyAsync();
     }
 }

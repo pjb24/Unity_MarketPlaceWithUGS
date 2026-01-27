@@ -1,44 +1,49 @@
 /**
- * QueryListings (Cloud Code / UGS)
+ * QueryListings (Cloud Code / UGS, Cloud Save v1.4 DataApi)
  *
  * 목적:
  * - 거래소 리스팅을 페이지 단위로 조회한다.
- * - Cloud Save Custom Item은 "쿼리" API가 없으므로, CreateListing에서 만든 인덱스(Custom Item key)를 이용한다.
- * - 인덱스 키를 정렬 순서대로 읽고, 해당 listingId를 추출해 리스팅(Custom Item)을 배치로 조회한다.
- * - 데이터 불일치(인덱스는 있는데 리스팅이 없는 등)는 무음 폴백 금지:
- *   Warning 로그를 남기고 해당 항목은 결과에서 제외한다(=부분 성공).
+ * - Cloud Save Custom Item은 “prefix로 서버 필터링된 목록”을 제공하지 않으므로,
+ *   DataApi.getCustomKeys()로 customId 전체 키(알파벳 ASC, 100개 단위)를 받아오고
+ *   서버에서 keyPrefix로 필터링하여 인덱스 키만 모은다.
+ * - 인덱스 키에서 listingId를 추출한 뒤,
+ *   DataApi.getCustomItems()로 리스팅을 배치 조회한다.
+ * - 리스팅에 연결된 “경매장 등록 아이템”은 customId="escrow"에 존재해야 한다.
+ *   (아이템 id에 prefix를 붙이지 않는다. 이동은 customId 변경으로 처리)
+ * - 데이터 불일치(인덱스는 있는데 리스팅이 없거나, 리스팅은 있는데 escrow 아이템이 없음 등)는
+ *   무음 폴백 금지: Warning 로그를 남기고 해당 항목은 결과에서 제외한다(=부분 성공).
  *
  * 데이터 저장 위치(기본값):
  * - 인덱스(Custom Items): customId = "market_indexes"
- *   - 최신순: IDX_STATUS_CREATEDAT_ACTIVE_<yyyymmdd>_<listingId>
- *   - 가격순: IDX_STATUS_PRICE_ACTIVE_<priceBucket12>_<listingId>
+ *   - 최신순(키 오름차순 기준): IDX_STATUS_CREATEDAT_ACTIVE_<yyyymmdd>_<listingId>
+ *   - 가격순(키 오름차순 기준): IDX_STATUS_PRICE_ACTIVE_<priceBucket12>_<listingId>
  * - 리스팅(Custom Items): customId = "market_listings", key = "LISTING_<listingId>"
+ * - 에스크로 아이템(Custom Items): customId = "escrow", key = "<itemInstanceId>"  // prefix 없음
  *
- * 구현 메모:
- * - listCustomItems는 페이지네이션(nextPageToken) 지원. keyPrefix로 범위를 좁힌다.
- * - createdAt 최신순은 key만으로는 "오름차순"이므로,
- *   최신순을 원하면 인덱스를 "역정렬용 키"로 설계해야 한다.
- *   현재 규칙(yyyymmdd)만으로는 일 단위 정렬만 보장되고, 시/분/초는 보장 불가.
- *   => 폴백이 아니므로 Warning은 남기지 않는다. (설계 제약)
+ * 정렬/페이지네이션 제약 (DataApi 기준):
+ * - getCustomKeys: customId 전체 키를 알파벳 ASC로만 제공(100개 단위).
+ * - 서버 prefix 필터가 없으므로, 원하는 prefix를 모을 때까지 여러 페이지를 스캔해야 한다.
+ * - order=DESC는 지원 불가. 요청이 오면 Warning 로그 후 ASC 기반으로 반환한다.
  *
  * params (최대 10개):
- *  1) status: "ACTIVE" | "SOLD" | "CANCELED" (선택, 기본 "ACTIVE")  // 현재는 ACTIVE 인덱스만 지원
+ *  1) status: "ACTIVE" (선택, 기본 "ACTIVE") // 현재 인덱스는 ACTIVE만 사용
  *  2) sort: "CREATED_AT" | "PRICE" (선택, 기본 "CREATED_AT")
- *  3) order: "ASC" | "DESC" (선택, 기본 "ASC") // DESC는 인덱스 설계상 완전 보장 불가(위 메모 참조)
+ *  3) order: "ASC" | "DESC" (선택, 기본 "ASC") // DESC 불가 -> Warning + ASC로 동작
  *  4) pageSize: number (선택, 기본 20, 최대 50)
- *  5) pageToken: string (선택) // Cloud Save nextPageToken 그대로
+ *  5) pageToken: string (선택) // getCustomKeys(after)에 그대로 넣는 “after 키”
  *  6) indexesCustomId: string (선택, 기본 "market_indexes")
  *  7) listingsCustomId: string (선택, 기본 "market_listings")
+ *  8) escrowCustomId: string (선택, 기본 "escrow")
  *
  * return:
- * - items: listing[] (조회된 listing.value 배열)
- * - nextPageToken: string | null
- * - skipped: number (불일치로 제외된 개수)
+ * - items: listing[]  (각 listing에 escrowItem 필드를 붙여 반환)
+ * - nextPageToken: string | null  // 다음 호출 시 after 로 넣을 키 (마지막 스캔 키)
+ * - skipped: number
  */
 
 const { DataApi } = require("@unity-services/cloud-save-1.4");
 
-module.exports = async function QueryListings(params, context, logger) {
+module.exports = async function QueryListings({ params, context, logger }) {
   const {
     status,
     sort,
@@ -46,7 +51,8 @@ module.exports = async function QueryListings(params, context, logger) {
     pageSize,
     pageToken,
     indexesCustomId,
-    listingsCustomId
+    listingsCustomId,
+    escrowCustomId
   } = params || {};
 
   const _status = status || "ACTIVE";
@@ -68,114 +74,187 @@ module.exports = async function QueryListings(params, context, logger) {
 
   const _indexesCustomId = indexesCustomId || "market_indexes";
   const _listingsCustomId = listingsCustomId || "market_listings";
+  const _escrowCustomId = escrowCustomId || "escrow";
 
-  const cloudSave = new DataApi(context);
+  const cloudSave = new DataApi({ accessToken: context.accessToken });
   const projectId = context.projectId;
 
-  // 인덱스 prefix 결정
-  // - CREATED_AT: 날짜 단위 prefix까지만 가능(yyyymmdd는 key 내부라 prefix로 전체를 못 잡음) => "IDX_STATUS_CREATEDAT_ACTIVE_"
-  // - PRICE: "IDX_STATUS_PRICE_ACTIVE_"
   const keyPrefix = (_sort === "PRICE") ?
     "IDX_STATUS_PRICE_ACTIVE_" :
     "IDX_STATUS_CREATEDAT_ACTIVE_";
 
   if (_order === "DESC") {
-    // 현재 키 설계상 listCustomItems는 기본 오름차순 조회이며, 서버에서 역순 조회가 안 된다.
-    // order=DESC를 받되, 실제 반환은 ASC 기반이 될 수 있음을 Warning으로 알린다(무음 금지).
-    logger.warning("QueryListings fallback: order=DESC requested but Cloud Save listCustomItems does not support reverse order. Returning ASC-based page.");
+    logger.warning("QueryListings fallback: order=DESC requested but Cloud Save getCustomKeys returns ASC only. Returning ASC-based page.");
   }
 
-  // 1) 인덱스 페이지 조회
-  const listReq = {
-    projectId,
-    customId: _indexesCustomId,
-    limit: _pageSize,
-    keyPrefix
-  };
-  if (pageToken && typeof pageToken === "string") {
-    listReq.after = pageToken; // 일부 런타임에서 pageToken 필드명이 after로 노출되는 케이스 대비
-    listReq.pageToken = pageToken; // 런타임/SDK 차이 대비 (둘 중 하나만 먹힘)
-  }
+  // 1) 인덱스 키 수집 (getCustomKeys는 서버 prefix 필터 없음 -> 스캔)
+  const matchedIndexKeys = [];
+  let skipped = 0;
 
-  let indexRows = [];
+  let after = (typeof pageToken === "string" && pageToken.length > 0) ? pageToken : undefined;
   let nextPageToken = null;
 
-  try {
-    // SDK 시그니처 차이를 흡수하기 위해, 반환값 구조를 방어적으로 처리
-    const indexRes = await cloudSave.listCustomItems(projectId, _indexesCustomId, {
-      limit: _pageSize,
-      keyPrefix,
-      pageToken: (pageToken && typeof pageToken === "string") ? pageToken : undefined
-    });
+  const MAX_KEY_PAGES_TO_SCAN = 20; // 20 * 100 = 2000 keys
+  let scannedPages = 0;
 
-    indexRows = (indexRes?.data?.results || []);
-    nextPageToken = indexRes?.data?.nextPageToken || null;
-  } catch (e) {
-    // listCustomItems 미지원/시그니처 불일치 등은 즉시 실패가 맞다.
-    throw new Error(`QueryListings: failed to list index items. err=${e?.message || e}`);
+  while (matchedIndexKeys.length < _pageSize && scannedPages < MAX_KEY_PAGES_TO_SCAN) {
+    scannedPages += 1;
+
+    let keysRes;
+    try {
+      keysRes = await cloudSave.getCustomKeys(projectId, _indexesCustomId, after);
+    } catch (e) {
+      throw new Error(`QueryListings: failed to getCustomKeys. err=${e?.message || e}`);
+    }
+
+    const rows = (keysRes?.data?.results || []);
+    if (rows.length === 0) {
+      nextPageToken = null;
+      break;
+    }
+
+    const lastKey = rows[rows.length - 1]?.key;
+    if (typeof lastKey === "string" && lastKey.length > 0) {
+      nextPageToken = lastKey;
+    }
+
+    for (const r of rows) {
+      const k = r?.key;
+      if (typeof k !== "string") continue;
+
+      if (k.startsWith(keyPrefix)) {
+        matchedIndexKeys.push(k);
+        if (matchedIndexKeys.length >= _pageSize) break;
+      }
+    }
+
+    after = (typeof lastKey === "string" && lastKey.length > 0) ? lastKey : undefined;
+  }
+
+  if (scannedPages >= MAX_KEY_PAGES_TO_SCAN && matchedIndexKeys.length < _pageSize) {
+    logger.warning(`QueryListings fallback: scanned too many key pages without collecting enough index keys. scannedPages=${scannedPages}, collected=${matchedIndexKeys.length}`);
   }
 
   // 2) listingId 추출
   const listingIds = [];
-  for (const row of indexRows) {
-    const k = row?.key;
-    if (typeof k !== "string") continue;
-
-    // key 끝의 _<listingId> 추출
+  for (const k of matchedIndexKeys) {
     const lastUnderscore = k.lastIndexOf("_");
     if (lastUnderscore <= 0 || lastUnderscore === k.length - 1) {
+      skipped += 1;
       logger.warning(`QueryListings fallback: malformed index key. key=${k}`);
       continue;
     }
+
     const id = k.substring(lastUnderscore + 1);
     if (!id) {
+      skipped += 1;
       logger.warning(`QueryListings fallback: failed to parse listingId. key=${k}`);
       continue;
     }
+
     listingIds.push(id);
   }
 
-  // 3) 리스팅 배치 조회
+  // 3) 리스팅 배치 조회 (getCustomItems는 페이지 20 단위 -> 20개씩)
   const listingKeys = listingIds.map(id => `LISTING_${id}`);
-
-  let listingRows = [];
-  if (listingKeys.length > 0) {
-    const listingRes = await cloudSave.getCustomItems(projectId, _listingsCustomId, listingKeys);
-    listingRows = (listingRes?.data?.results || []);
-  }
-
   const listingMap = new Map();
-  for (const r of listingRows) {
-    if (r && typeof r.key === "string") listingMap.set(r.key, r.value);
+
+  const CHUNK = 20;
+  for (let i = 0; i < listingKeys.length; i += CHUNK) {
+    const chunkKeys = listingKeys.slice(i, i + CHUNK);
+
+    let res;
+    try {
+      res = await cloudSave.getCustomItems(projectId, _listingsCustomId, chunkKeys);
+    } catch (e) {
+      throw new Error(`QueryListings: failed to getCustomItems for listings. err=${e?.message || e}`);
+    }
+
+    const rows = (res?.data?.results || []);
+    for (const r of rows) {
+      if (r && typeof r.key === "string") listingMap.set(r.key, r.value);
+    }
   }
 
-  // 4) 결과 구성(인덱스 순서 유지)
-  const items = [];
-  let skipped = 0;
+  // 4) escrow 아이템 배치 조회 준비 (아이템 id에 prefix 없음)
+  const escrowItemIdSet = new Set();
+  const listingById = new Map();
 
   for (const id of listingIds) {
     const lk = `LISTING_${id}`;
     const v = listingMap.get(lk);
 
+    if (!v || typeof v !== "object") continue;
+    listingById.set(id, v);
+
+    const itemInstanceId = v.itemInstanceId; // 계약: listing.value에 itemInstanceId가 있어야 함
+    if (typeof itemInstanceId === "string" && itemInstanceId.length > 0) {
+      escrowItemIdSet.add(itemInstanceId);
+    }
+  }
+
+  const escrowItemIds = Array.from(escrowItemIdSet);
+  const escrowMap = new Map();
+
+  for (let i = 0; i < escrowItemIds.length; i += CHUNK) {
+    const chunkKeys = escrowItemIds.slice(i, i + CHUNK);
+
+    let res;
+    try {
+      // customId="escrow" 에 key="<itemInstanceId>" 로 저장되어 있어야 함 (prefix 없음)
+      res = await cloudSave.getCustomItems(projectId, _escrowCustomId, chunkKeys);
+    } catch (e) {
+      throw new Error(`QueryListings: failed to getCustomItems for escrow. err=${e?.message || e}`);
+    }
+
+    const rows = (res?.data?.results || []);
+    for (const r of rows) {
+      if (r && typeof r.key === "string") escrowMap.set(r.key, r.value);
+    }
+  }
+
+  // 5) 결과 구성(인덱스 순서 유지) + 정합성 검증
+  const items = [];
+
+  for (const id of listingIds) {
+    const v = listingById.get(id);
+
     if (!v || typeof v !== "object") {
       skipped += 1;
-      logger.warning(`QueryListings fallback: listing missing for index. listingKey=${lk}`);
+      logger.warning(`QueryListings fallback: listing missing for index. listingKey=LISTING_${id}`);
       continue;
     }
 
-    // ACTIVE 인덱스 기반이므로, ACTIVE가 아니면 불일치로 제외 + Warning
     if (v.status !== "ACTIVE") {
       skipped += 1;
       logger.warning(`QueryListings fallback: listing status mismatch for ACTIVE index. listingId=${id}, status=${v.status}`);
       continue;
     }
 
-    items.push(v);
+    const itemInstanceId = v.itemInstanceId;
+    if (typeof itemInstanceId !== "string" || itemInstanceId.length === 0) {
+      skipped += 1;
+      logger.warning(`QueryListings fallback: listing missing itemInstanceId. listingId=${id}`);
+      continue;
+    }
+
+    const escrowItem = escrowMap.get(itemInstanceId);
+    if (!escrowItem || typeof escrowItem !== "object") {
+      skipped += 1;
+      logger.warning(`QueryListings fallback: escrow item missing for listing. listingId=${id}, itemInstanceId=${itemInstanceId}, escrowCustomId=${_escrowCustomId}`);
+      continue;
+    }
+
+    // 반환 객체에 escrowItem을 붙인다(원본 v는 건드리지 않음)
+    items.push({
+      ...v,
+      escrowItem
+    });
   }
 
   return {
     items,
-    nextPageToken,
+    nextPageToken: nextPageToken || null,
     skipped
   };
 };

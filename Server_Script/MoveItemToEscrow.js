@@ -230,10 +230,10 @@ module.exports = async ({ params, context, logger }) => {
     if (!inventoryContainerKey) {
       // 단건 키 저장
       await dataApi.setPrivateCustomItem(projectId, inventoryCustomId, {
-          key: inventoryKey,
-          value: next,
-          ...DataApi(itemWriteLock ? { writeLock: itemWriteLock } : {}),
-        });
+        key: inventoryKey,
+        value: next,
+        ...DataApi(itemWriteLock ? { writeLock: itemWriteLock } : {}),
+      });
     } else {
       // 컨테이너 저장(컨테이너 형태 유지)
       if (!container) {

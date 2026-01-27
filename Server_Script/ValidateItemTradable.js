@@ -1,228 +1,604 @@
 /**
  * ValidateItemTradable
- * - 아이템 인스턴스가 거래소에 "등록/구매/이동" 가능한지 서버에서 검증한다.
- * - 클라 신뢰 금지.
  *
- * 입력 params:
- *  - itemInstanceId: string (필수)
- *  - playerId: string (선택) 기본: context.playerId
- *  - expectedZone: "BAG" | "EQUIPPED" | "MARKET_ESCROW" | "STORAGE" | null (선택) 기본: "BAG"
- *  - allowKinds: string[] (선택) 기본: ["FRAG","EQ"]
- *  - inventoryCustomId: string (선택) 기본: "inventory"
- *  - inventoryKey: string (선택) 기본: itemInstanceId
- *  - inventoryContainerKey: string (선택) 기본: null
- *      - 아이템을 단건 키로 저장하지 않고, 컨테이너(예: key="items")에 배열/맵으로 저장한 경우에만 사용.
+ * 목적:
+ * - GrantItemInstanceToPlayer가 생성/저장한 “Protected Items(=Protected Player Data)” 구조를 기준으로
+ *   아이템 인스턴스가 거래 가능한지 검증한다.
+ * - 거래소 등록 아이템(escrow)은 “customId 변경” 방식이므로,
+ *   인벤(Protected Items)에서 아이템을 제거하고 escrow customId로 옮긴 뒤에도
+ *   itemInstanceId(=key) 그대로 유지된다는 전제를 따른다. (id prefix 금지)
  *
- * 반환:
- *  - { ok: true, tradable: boolean, reasonCode: string|null, details: object }
+ * 저장 위치(조회 기준):
+ * - INVENTORY: DataApi.getProtectedItems(projectId, playerId, keys) 로 단건 조회
+ *   - key = itemInstanceId (=instanceKey)
+ * - ESCROW: DataApi.getPublicCustomItem(marketOwnerPlayerId, escrowCustomId, itemInstanceId) 로 단건 조회
+ *   - escrow에는 “에스크로 레코드(랩)” 또는 “아이템 인스턴스 그대로” 둘 다 올 수 있다.
+ *     - 랩 형태: { schema, status, itemInstanceId, sellerPlayerId, item: <instance> ... }
+ *     - 인스턴스 형태: GrantItemInstanceToPlayer의 instance 그대로
+ *
+ * 검증 규칙(GrantItemInstanceToPlayer 기준):
+ * - instance.schema === 1 필수
+ * - instance.instanceId/instanceKey/templateKey/groupKey/kind/slot/tier/rarity/quantity/payload/lifecycle 필드 존재/타입 검사
+ * - kind는 allowKinds에 포함 (기본 ["FRAG","EQ"])
+ * - market 필드는 Grant 코드에 기본 포함되지 않는다.
+ *   - 따라서 requireMarketTradable=false 기본(=market 미존재 허용)
+ *   - requireMarketTradable=true일 경우:
+ *     - instance.market.tradable === true 필요
+ * - tradeLock 필드도 기본 포함되지 않는다.
+ *   - 따라서 requireUnlocked=false 기본(=tradeLock 미존재 허용)
+ *   - requireUnlocked=true일 경우:
+ *     - tradeLock.isLocked !== true 필요
+ * - expectedZone은 location.zone 기반 검사인데, Grant 인스턴스에는 location이 없다.
+ *   - expectedZone이 null이 아니면, location 누락은 “폴백 금지” 정책상 실패 처리한다.
+ * 
+ * 폴백/로깅:
+ * - 호출 실패/404 등으로 읽기 실패 시: ok=true, tradable=false 반환 + Warning 로그(무음 금지)
+ * - storage=ESCROW에서 “랩/인스턴스” 자동 판별 실패 시: Warning 로그 + 실패 반환
+ *
+ * params (총 10개):
+ *  1) itemInstanceId: string (필수)
+ *  2) storage: "INVENTORY" | "ESCROW" (선택, 기본 "INVENTORY")
+ *  3) playerId: string (선택, INVENTORY일 때만 사용, 기본 context.playerId)
+ *  4) inventoryProjectId: string (선택, INVENTORY일 때만 사용, 기본 context.projectId)
+ *  5) marketOwnerPlayerId: string (선택, ESCROW일 때만 사용, 기본 "MARKET")
+ *  6) escrowCustomId: string (선택, ESCROW일 때만 사용, 기본 "escrow")
+ *  7) allowKinds: string[] (선택, 기본 ["FRAG","EQ"])
+ *  8) requireMarketTradable: boolean (선택, 기본 false)
+ *  9) requireUnlocked: boolean (선택, 기본 false)
+ * 10) expectedZone: string|null (선택, 기본 null)
+ *
+ * return:
+ *  - { ok: true, tradable: boolean, storageUsed, keyUsed, details }
  */
 
 const { DataApi } = require("@unity-services/cloud-save-1.4");
 
-const E_TradeValidateReason = Object.freeze({
+const E_ValidateTradableFail = Object.freeze({
   OK: "OK",
 
   NOT_FOUND: "NOT_FOUND",
+  LOAD_FAILED: "LOAD_FAILED",
+
   INVALID_SCHEMA: "INVALID_SCHEMA",
   INVALID_KIND: "INVALID_KIND",
 
+  INVALID_INSTANCE_SHAPE: "INVALID_INSTANCE_SHAPE",
+
+  MARKET_REQUIRED_MISSING: "MARKET_REQUIRED_MISSING",
   NOT_TRADABLE_FLAG: "NOT_TRADABLE_FLAG",
 
+  LOCK_REQUIRED_MISSING: "LOCK_REQUIRED_MISSING",
   LOCKED: "LOCKED",
-  LOCKED_UNTIL: "LOCKED_UNTIL",
 
+  LOCATION_REQUIRED_MISSING: "LOCATION_REQUIRED_MISSING",
   WRONG_LOCATION: "WRONG_LOCATION",
-  EQUIPPED_LOCK: "EQUIPPED_LOCK",
 
-  MALFORMED_MARKET: "MALFORMED_MARKET",
+  ESCROW_WRAPPER_INVALID: "ESCROW_WRAPPER_INVALID",
 });
 
-module.exports = async ({ params, context, logger }) => {
-  const playerId = params.playerId ?? context.playerId;
-  if (!playerId) throw new Error("playerId is required (params.playerId or context.playerId).");
+function _nowIso() {
+  return new Date().toISOString();
+}
 
+function _isPlainObject(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+function _hasOwn(obj, prop) {
+  return obj != null && Object.prototype.hasOwnProperty.call(obj, prop);
+}
+
+function _asBool(v, def) {
+  return (v === undefined) ? def : (v === true);
+}
+
+function _validateGrantInstanceShape(inst) {
+  if (!_isPlainObject(inst)) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "instance not object" };
+  if (inst.schema !== 1) return { ok: false, failCode: E_ValidateTradableFail.INVALID_SCHEMA, msg: "instance.schema must be 1" };
+
+  // 핵심 필드(Grant 코드 기준)
+  if (typeof inst.instanceId !== "string" || inst.instanceId.length === 0) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing instance.instanceId" };
+  if (typeof inst.instanceKey !== "string" || inst.instanceKey.length === 0) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing instance.instanceKey" };
+
+  if (typeof inst.templateKey !== "string" || inst.templateKey.length === 0) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing instance.templateKey" };
+  if (typeof inst.groupKey !== "string" || inst.groupKey.length === 0) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing instance.groupKey" };
+
+  if (typeof inst.kind !== "string" || inst.kind.length === 0) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing instance.kind" };
+  if (typeof inst.slot !== "string" || inst.slot.length === 0) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing instance.slot" };
+
+  if (!Number.isInteger(inst.tier) || inst.tier < 1) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "instance.tier must be int >=1" };
+  if (typeof inst.seq3 !== "string" || inst.seq3.length === 0) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing instance.seq3" };
+
+  if (typeof inst.rarity !== "string" || inst.rarity.length === 0) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing instance.rarity" };
+  if (!Number.isInteger(inst.quantity) || inst.quantity < 1) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "instance.quantity must be int >=1" };
+
+  if (!_isPlainObject(inst.payload)) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "instance.payload must be object" };
+
+  const lc = inst.lifecycle;
+  if (!_isPlainObject(lc)) return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing instance.lifecycle" };
+  if (typeof lc.createdAt !== "string") return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing lifecycle.createdAt" };
+  if (typeof lc.updatedAt !== "string") return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing lifecycle.updatedAt" };
+  if (typeof lc.createdBy !== "string") return { ok: false, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, msg: "missing lifecycle.createdBy" };
+
+  return { ok: true };
+}
+
+function _extractInstanceFromEscrowValue(value, logger, itemInstanceId) {
+  // 1) 랩 형태
+  if (_isPlainObject(value) && _isPlainObject(value.item)) {
+    const wId = value.itemInstanceId;
+    if (typeof wId === "string" && wId !== itemInstanceId) {
+      return {
+        ok: false,
+        failCode: E_ValidateTradableFail.ESCROW_WRAPPER_INVALID,
+        msg: `escrow wrapper itemInstanceId mismatch: ${wId}`,
+      };
+    }
+    return { ok: true, wrapper: value, instance: value.item, wrapperStatus: value.status ?? null };
+  }
+
+  // 2) 인스턴스 형태(그대로 저장된 경우)
+  if (_isPlainObject(value) && value.schema === 1 && typeof value.instanceId === "string") {
+    return { ok: true, wrapper: null, instance: value, wrapperStatus: null };
+  }
+
+  logger?.warn?.(
+    `[ValidateItemTradable] FALLBACK escrow shape detection failed. itemInstanceId=${itemInstanceId}`
+  );
+  return { ok: false, failCode: E_ValidateTradableFail.ESCROW_WRAPPER_INVALID, msg: "unknown escrow value shape" };
+}
+
+module.exports = async ({ params, context, logger }) => {
   const itemInstanceId = params.itemInstanceId;
+
+  const storage = params.storage ?? "INVENTORY"; // "INVENTORY" | "ESCROW"
+
+  const playerId = params.playerId ?? context.playerId;
+  const inventoryProjectId = params.inventoryProjectId ?? context.projectId;
+
+  const marketOwnerPlayerId = params.marketOwnerPlayerId ?? "MARKET";
+  const escrowCustomId = params.escrowCustomId ?? "escrow";
+
+  const allowKinds = Array.isArray(params.allowKinds) ? params.allowKinds : ["FRAG", "EQ"];
+  const requireMarketTradable = _asBool(params.requireMarketTradable, false);
+  const requireUnlocked = _asBool(params.requireUnlocked, false);
+  const expectedZone = (params.expectedZone === undefined) ? null : params.expectedZone;
+
   if (!itemInstanceId) throw new Error("itemInstanceId is required.");
 
-  const expectedZone = (params.expectedZone === undefined) ? "BAG" : params.expectedZone; // null 허용
-  const allowKinds = Array.isArray(params.allowKinds) ? params.allowKinds : ["FRAG", "EQ"];
+  const nowIso = _nowIso();
+  const api = new DataApi(context);
 
-  const inventoryCustomId = params.inventoryCustomId ?? "inventory";
-  const inventoryKey = params.inventoryKey ?? itemInstanceId;
-  const inventoryContainerKey = params.inventoryContainerKey ?? null;
+  const keyUsed = itemInstanceId;
 
-  const dataApi = new DataApi(context);
-  const projectId = context.projectId;
+  let raw = null;
+  let storageUsed = storage;
+  let detailsBase = {
+    itemInstanceId,
+    nowIso,
+    storageUsed,
+    keyUsed,
+  };
 
-  const nowIso = new Date().toISOString();
-  const nowMs = Date.now();
-
-  // ---- 1) 아이템 로드 (단건 키 우선, 컨테이너 폴백) ----
-  let item = null;
-  let loadPath = null;
-
-  // (A) 단건 키로 저장된 경우: key == itemInstanceId (권장)
-  try {
-    const res = await dataApi.getPrivateCustomItem(projectId, inventoryCustomId, [inventoryKey]);
-    item = res?.data?.results?.[0]?.value ?? null;
-    loadPath = `privateCustomItems:${inventoryCustomId}/${inventoryKey}`;
-  } catch (e) {
-    // 폴백 시도
-    logger.warning(
-      `[ValidateItemTradable] primary load failed. fallback will run. playerId=${playerId}, customId=${inventoryCustomId}, key=${inventoryKey}, err=${e?.message ?? e}`
-    );
-  }
-
-  // (B) 컨테이너 키(예: key="items") 안에 배열/맵으로 저장된 경우 폴백
-  if (!item && inventoryContainerKey) {
+  // ---------- 1) 로드 ----------
+  if (storage === "ESCROW") {
     try {
-      const res = await dataApi.getPrivateCustomItem(projectId, inventoryCustomId, [inventoryContainerKey]);
-      const container = res?.data?.results?.[0]?.value;
-
-      if (Array.isArray(container)) {
-        item = container.find(x => x?.instanceId === itemInstanceId || x?.id === itemInstanceId) ?? null;
-      } else if (container && typeof container === "object") {
-        item = container[itemInstanceId] ?? null;
-      }
-
-      loadPath = `privateCustomItemContainer:${inventoryCustomId}/${inventoryContainerKey}`;
-      logger.warning(
-        `[ValidateItemTradable] fallback container load used. playerId=${playerId}, customId=${inventoryCustomId}, containerKey=${inventoryContainerKey}, itemInstanceId=${itemInstanceId}`
-      );
+      // customId 변경 기반 escrow: Public Custom Item 사용
+      const res = await api.getPublicCustomItem(marketOwnerPlayerId, escrowCustomId, keyUsed);
+      raw = res?.data?.value ?? null;
     } catch (e) {
-      // 폴백도 실패
-      logger.warning(
-        `[ValidateItemTradable] fallback container load failed. playerId=${playerId}, customId=${inventoryCustomId}, containerKey=${inventoryContainerKey}, err=${e?.message ?? e}`
+      logger?.warn?.(
+        `[ValidateItemTradable] ESCROW load failed. marketOwnerPlayerId=${marketOwnerPlayerId}, customId=${escrowCustomId}, key=${keyUsed}, err=${e?.message ?? e}`
       );
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: {
+          ...detailsBase,
+          failCode: E_ValidateTradableFail.LOAD_FAILED,
+          message: "escrow load failed",
+          error: e?.message ?? String(e),
+        },
+      };
     }
-  }
 
-  if (!item) {
-    return {
-      ok: true,
-      tradable: false,
-      reasonCode: E_TradeValidateReason.NOT_FOUND,
-      details: { playerId, itemInstanceId, loadedFrom: loadPath, nowIso },
-    };
-  }
+    if (!raw) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.NOT_FOUND, message: "escrow item not found" },
+      };
+    }
 
-  // ---- 2) 최소 필드 정규화 ----
-  const kind = item.kind;
-  if (!kind || typeof kind !== "string") {
-    return {
-      ok: true,
-      tradable: false,
-      reasonCode: E_TradeValidateReason.INVALID_SCHEMA,
-      details: { playerId, itemInstanceId, loadedFrom: loadPath, nowIso, hint: "missing item.kind" },
-    };
-  }
+    const ex = _extractInstanceFromEscrowValue(raw, logger, itemInstanceId);
+    if (!ex.ok) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: ex.failCode, message: ex.msg },
+      };
+    }
 
-  if (!allowKinds.includes(kind)) {
-    return {
-      ok: true,
-      tradable: false,
-      reasonCode: E_TradeValidateReason.INVALID_KIND,
-      details: { playerId, itemInstanceId, kind, allowKinds, loadedFrom: loadPath, nowIso },
-    };
-  }
+    const instance = ex.instance;
 
-  // FRAG 정의에는 location이 없을 수 있다. 그 경우 BAG로 간주(폴백) + Warning 로그.
-  let zone = item?.location?.zone ?? null;
-  if (!zone) {
-    zone = "BAG";
-    logger.warning(
-      `[ValidateItemTradable] item.location.zone missing. fallback zone=BAG applied. playerId=${playerId}, itemInstanceId=${itemInstanceId}, kind=${kind}`
-    );
-  }
+    // ---------- 2) shape 검증(Grant 기준) ----------
+    const shape = _validateGrantInstanceShape(instance);
+    if (!shape.ok) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: shape.failCode, message: shape.msg, wrapperStatus: ex.wrapperStatus },
+      };
+    }
 
-  const market = item.market;
-  if (!market || typeof market !== "object") {
-    return {
-      ok: true,
-      tradable: false,
-      reasonCode: E_TradeValidateReason.MALFORMED_MARKET,
-      details: { playerId, itemInstanceId, kind, zone, loadedFrom: loadPath, nowIso, hint: "missing item.market" },
-    };
-  }
+    // key/id 일치(Grant 규칙: instanceKey=instanceId=CloudSave key)
+    if (instance.instanceKey !== itemInstanceId || instance.instanceId !== itemInstanceId) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: {
+          ...detailsBase,
+          failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE,
+          message: `instanceId/instanceKey mismatch. instanceId=${instance.instanceId} instanceKey=${instance.instanceKey}`,
+          wrapperStatus: ex.wrapperStatus,
+        },
+      };
+    }
 
-  const tradableFlag = market.tradable === true;
-  const tradeLock = market.tradeLock ?? { isLocked: false, reason: null, until: null };
+    // kind allow
+    if (!allowKinds.includes(instance.kind)) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.INVALID_KIND, message: `invalid kind ${instance.kind}`, kind: instance.kind },
+      };
+    }
 
-  // ---- 3) 룰 체크 ----
-  // 3-1) 위치 체크
-  if (expectedZone !== null && zone !== expectedZone) {
-    return {
-      ok: true,
-      tradable: false,
-      reasonCode: E_TradeValidateReason.WRONG_LOCATION,
-      details: { playerId, itemInstanceId, kind, zone, expectedZone, loadedFrom: loadPath, nowIso },
-    };
-  }
-
-  // 3-2) 장비 착용 상태 거래 금지
-  if (kind === "EQ" && zone === "EQUIPPED") {
-    return {
-      ok: true,
-      tradable: false,
-      reasonCode: E_TradeValidateReason.EQUIPPED_LOCK,
-      details: { playerId, itemInstanceId, kind, zone, loadedFrom: loadPath, nowIso },
-    };
-  }
-
-  // 3-3) tradable 플래그
-  if (!tradableFlag) {
-    return {
-      ok: true,
-      tradable: false,
-      reasonCode: E_TradeValidateReason.NOT_TRADABLE_FLAG,
-      details: { playerId, itemInstanceId, kind, zone, loadedFrom: loadPath, nowIso },
-    };
-  }
-
-  // 3-4) tradeLock
-  if (tradeLock?.isLocked === true) {
-    // until이 있고 이미 지났으면 "잠금 만료됨" 상태인데 isLocked가 true로 남아있는 데이터 오염이다.
-    // 여기서 조용히 풀지 않는다. 폴백 처리 대신 Warning 로그 + 차단(운영/복구 경로로 정리).
-    const untilIso = tradeLock.until;
-    if (untilIso) {
-      const untilMs = Date.parse(untilIso);
-      if (!Number.isNaN(untilMs) && untilMs <= nowMs) {
-        logger.warning(
-          `[ValidateItemTradable] tradeLock expired but still locked. blocked. playerId=${playerId}, itemInstanceId=${itemInstanceId}, until=${untilIso}, now=${nowIso}, reason=${tradeLock.reason}`
-        );
+    // market/tradeLock (기본은 미요구)
+    // market/tradeLock
+    if (requireMarketTradable) {
+      if (!_hasOwn(instance, "market") || instance.market == null) {
         return {
           ok: true,
           tradable: false,
-          reasonCode: E_TradeValidateReason.LOCKED_UNTIL,
-          details: { playerId, itemInstanceId, kind, zone, tradeLock, nowIso },
+          storageUsed,
+          keyUsed,
+          details: { ...detailsBase, failCode: E_ValidateTradableFail.MARKET_REQUIRED_MISSING, message: "market required but missing" },
+        };
+      }
+
+      const m = instance.market;
+      if (!_isPlainObject(m)) {
+        return {
+          ok: true,
+          tradable: false,
+          storageUsed,
+          keyUsed,
+          details: { ...detailsBase, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, message: "instance.market must be a non-null object" },
+        };
+      }
+
+      if (m.tradable !== true) {
+        return {
+          ok: true,
+          tradable: false,
+          storageUsed,
+          keyUsed,
+          details: { ...detailsBase, failCode: E_ValidateTradableFail.NOT_TRADABLE_FLAG, message: "market.tradable is false" },
+        };
+      }
+    }
+
+    if (requireUnlocked) {
+      if (!_hasOwn(instance, "market") || instance.market == null) {
+        return {
+          ok: true,
+          tradable: false,
+          storageUsed,
+          keyUsed,
+          details: { ...detailsBase, failCode: E_ValidateTradableFail.MARKET_REQUIRED_MISSING, message: "market required for tradeLock but missing" },
+        };
+      }
+
+      const m = instance.market;
+      if (!_isPlainObject(m)) {
+        return {
+          ok: true,
+          tradable: false,
+          storageUsed,
+          keyUsed,
+          details: { ...detailsBase, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, message: "instance.market must be a non-null object" },
+        };
+      }
+
+      if (!_hasOwn(m, "tradeLock") || m.tradeLock == null) {
+        return {
+          ok: true,
+          tradable: false,
+          storageUsed,
+          keyUsed,
+          details: { ...detailsBase, failCode: E_ValidateTradableFail.LOCK_REQUIRED_MISSING, message: "tradeLock required but missing" },
+        };
+      }
+
+      const tl = m.tradeLock;
+      if (!_isPlainObject(tl) || typeof tl.isLocked !== "boolean") {
+        return {
+          ok: true,
+          tradable: false,
+          storageUsed,
+          keyUsed,
+          details: { ...detailsBase, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, message: "tradeLock must be a non-null object with boolean isLocked" },
+        };
+      }
+
+      if (tl.isLocked === true) {
+        return {
+          ok: true,
+          tradable: false,
+          storageUsed,
+          keyUsed,
+          details: { ...detailsBase, failCode: E_ValidateTradableFail.LOCKED, message: `locked reason=${tl.reason}`, tradeLock: tl },
+        };
+      }
+    }
+    if (expectedZone !== null) {
+      const zone = instance.location?.zone ?? null;
+      if (zone === null) {
+        return {
+          ok: true,
+          tradable: false,
+          storageUsed,
+          keyUsed,
+          details: { ...detailsBase, failCode: E_ValidateTradableFail.LOCATION_REQUIRED_MISSING, message: "expectedZone set but instance.location.zone missing" },
+        };
+      }
+      if (zone !== expectedZone) {
+        return {
+          ok: true,
+          tradable: false,
+          storageUsed,
+          keyUsed,
+          details: { ...detailsBase, failCode: E_ValidateTradableFail.WRONG_LOCATION, message: `zone=${zone} expected=${expectedZone}`, zone, expectedZone },
         };
       }
     }
 
     return {
       ok: true,
-      tradable: false,
-      reasonCode: E_TradeValidateReason.LOCKED,
-      details: { playerId, itemInstanceId, kind, zone, tradeLock, nowIso },
+      tradable: true,
+      storageUsed,
+      keyUsed,
+      details: {
+        ...detailsBase,
+        kind: instance.kind,
+        slot: instance.slot,
+        tier: instance.tier,
+        rarity: instance.rarity,
+        groupKey: instance.groupKey,
+        templateKey: instance.templateKey,
+        wrapperStatus: ex.wrapperStatus,
+      },
     };
   }
 
-  // ---- OK ----
+  // ---------- INVENTORY (Protected Items) ----------
+  storageUsed = "INVENTORY";
+  detailsBase.storageUsed = storageUsed;
+
+  if (!playerId) throw new Error("playerId is required for INVENTORY (params.playerId or context.playerId).");
+  if (!inventoryProjectId) throw new Error("inventoryProjectId is required (params.inventoryProjectId or context.projectId).");
+
+  try {
+    const res = await api.getProtectedItems(inventoryProjectId, playerId, [keyUsed]);
+    const items = res?.data?.results ?? [];
+    if (Array.isArray(items) && items.length > 0) {
+      // results: [{ key, value, writeLock, modifiedAt ... }]
+      raw = items[0]?.value ?? null;
+    } else {
+      raw = null;
+    }
+  } catch (e) {
+    logger?.warn?.(
+      `[ValidateItemTradable] INVENTORY load failed. projectId=${inventoryProjectId}, playerId=${playerId}, key=${keyUsed}, err=${e?.message ?? e}`
+    );
+    return {
+      ok: true,
+      tradable: false,
+      storageUsed,
+      keyUsed,
+      details: {
+        ...detailsBase,
+        failCode: E_ValidateTradableFail.LOAD_FAILED,
+        message: "inventory load failed",
+        error: e?.message ?? String(e),
+      },
+    };
+  }
+
+  if (!raw) {
+    return {
+      ok: true,
+      tradable: false,
+      storageUsed,
+      keyUsed,
+      details: { ...detailsBase, failCode: E_ValidateTradableFail.NOT_FOUND, message: "inventory item not found", playerId },
+    };
+  }
+
+  const instance = raw;
+
+  const shape = _validateGrantInstanceShape(instance);
+  if (!shape.ok) {
+    return {
+      ok: true,
+      tradable: false,
+      storageUsed,
+      keyUsed,
+      details: { ...detailsBase, failCode: shape.failCode, message: shape.msg, playerId },
+    };
+  }
+
+  if (instance.instanceKey !== itemInstanceId || instance.instanceId !== itemInstanceId) {
+    return {
+      ok: true,
+      tradable: false,
+      storageUsed,
+      keyUsed,
+      details: {
+        ...detailsBase,
+        failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE,
+        message: `instanceId/instanceKey mismatch. instanceId=${instance.instanceId} instanceKey=${instance.instanceKey}`,
+        playerId,
+      },
+    };
+  }
+
+  if (!allowKinds.includes(instance.kind)) {
+    return {
+      ok: true,
+      tradable: false,
+      storageUsed,
+      keyUsed,
+      details: { ...detailsBase, failCode: E_ValidateTradableFail.INVALID_KIND, message: `invalid kind ${instance.kind}`, kind: instance.kind, playerId },
+    };
+  }
+  // market/tradeLock
+  if (requireMarketTradable) {
+    if (!_hasOwn(instance, "market") || instance.market == null) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.MARKET_REQUIRED_MISSING, message: "market required but missing" },
+      };
+    }
+
+    const m = instance.market;
+    if (!_isPlainObject(m)) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, message: "instance.market must be a non-null object" },
+      };
+    }
+
+    if (m.tradable !== true) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.NOT_TRADABLE_FLAG, message: "market.tradable is false" },
+      };
+    }
+  }
+
+  if (requireUnlocked) {
+    if (!_hasOwn(instance, "market") || instance.market == null) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.MARKET_REQUIRED_MISSING, message: "market required for tradeLock but missing" },
+      };
+    }
+
+    const m = instance.market;
+    if (!_isPlainObject(m)) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, message: "instance.market must be a non-null object" },
+      };
+    }
+
+    if (!_hasOwn(m, "tradeLock") || m.tradeLock == null) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.LOCK_REQUIRED_MISSING, message: "tradeLock required but missing" },
+      };
+    }
+
+    const tl = m.tradeLock;
+    if (!_isPlainObject(tl) || typeof tl.isLocked !== "boolean") {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.INVALID_INSTANCE_SHAPE, message: "tradeLock must be a non-null object with boolean isLocked" },
+      };
+    }
+
+    if (tl.isLocked === true) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.LOCKED, message: `locked reason=${tl.reason}`, tradeLock: tl },
+      };
+    }
+  }
+
+  if (expectedZone !== null) {
+    const zone = instance.location?.zone ?? null;
+    if (zone === null) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.LOCATION_REQUIRED_MISSING, message: "expectedZone set but instance.location.zone missing", playerId },
+      };
+    }
+    if (zone !== expectedZone) {
+      return {
+        ok: true,
+        tradable: false,
+        storageUsed,
+        keyUsed,
+        details: { ...detailsBase, failCode: E_ValidateTradableFail.WRONG_LOCATION, message: `zone=${zone} expected=${expectedZone}`, zone, expectedZone, playerId },
+      };
+    }
+  }
+
   return {
     ok: true,
     tradable: true,
-    reasonCode: null,
+    storageUsed,
+    keyUsed,
     details: {
+      ...detailsBase,
       playerId,
-      itemInstanceId,
-      kind,
-      zone,
-      loadedFrom: loadPath,
-      nowIso,
-      market: {
-        tradable: true,
-        tradeLock: { isLocked: false },
-      },
+      kind: instance.kind,
+      slot: instance.slot,
+      tier: instance.tier,
+      rarity: instance.rarity,
+      groupKey: instance.groupKey,
+      templateKey: instance.templateKey,
     },
   };
 };
