@@ -1,0 +1,51 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: da99093d5be84e041a3822a9b6f3c234, type: 3}
+  m_Name: ItemStaticDatabase
+  m_EditorClassIdentifier: Assembly-CSharp::ItemStaticDatabase
+  _entries:
+  - _groupKey: FRAG_WPN_T1_001
+    _image: {fileID: 56462163, guid: 134ea6385d5c3584794d4e58e5ce61cf, type: 3}
+    _itemName: "\uD608\uD754\uC758 \uAC80\uD3B8 \uD30C\uD3B8"
+  - _groupKey: FRAG_WPN_T1_002
+    _image: {fileID: 1579184353, guid: 91f82590e640e0b448546d4d87860b17, type: 3}
+    _itemName: "\uBB34\uB518 \uAC15\uCCA0 \uC190\uC7A1\uC774 \uD30C\uD3B8"
+  - _groupKey: FRAG_ARM_T1_001
+    _image: {fileID: -1024991986, guid: 1c23f336ae865894d8d356cbe25dfbfe, type: 3}
+    _itemName: "\uC218\uD638 \uBB38\uC7A5\uC758 \uD749\uAC11 \uD30C\uD3B8"
+  - _groupKey: FRAG_ARM_T1_002
+    _image: {fileID: -1765400621, guid: 98d1af5286522764dbec392be72a1469, type: 3}
+    _itemName: "\uACB0\uC18D \uCCA0\uD3B8 \uD30C\uD3B8"
+  - _groupKey: FRAG_ACC_T1_001
+    _image: {fileID: 256935433, guid: 210ec2ee86be61741b1258f14941031f, type: 3}
+    _itemName: "\uADE0\uC5F4\uC758 \uC18C\uC6A9\uB3CC\uC774 \uD30C\uD3B8"
+  - _groupKey: FRAG_ACC_T1_002
+    _image: {fileID: -697834378, guid: b42932f09619fda40a70084c3fc6ad35, type: 3}
+    _itemName: "\uC790\uC0C9 \uACF5\uBA85\uC758 \uBCF4\uC11D \uD30C\uD3B8"
+  - _groupKey: EQ_WPN_T1_001
+    _image: {fileID: 274622644, guid: 128f6305fe1b7cf488913b0538a25e1a, type: 3}
+    _itemName: "\uADE0\uC5F4\uC758 \uCCA0\uAC80"
+  - _groupKey: EQ_WPN_T1_002
+    _image: {fileID: -803587183, guid: 956263afd6db68c408594794fb2b5a1c, type: 3}
+    _itemName: "\uCE68\uBB35\uC758 \uC7A5\uAC80"
+  - _groupKey: EQ_ARM_T1_001
+    _image: {fileID: -40467525, guid: 97dfa07a572718d499a61d96d1a71345, type: 3}
+    _itemName: "\uBB34\uC1E0 \uACB0\uC18D\uC758 \uD749\uAC11"
+  - _groupKey: EQ_ARM_T1_002
+    _image: {fileID: -142811415, guid: cc099f84c021fda44a1a6fecfbd4b3f0, type: 3}
+    _itemName: "\uC644\uCDA9\uC758 \uB204\uBE44 \uAC11\uC637"
+  - _groupKey: EQ_ACC_T1_001
+    _image: {fileID: -2012953696, guid: b31094a39e453684c8da3ba6cd388722, type: 3}
+    _itemName: "\uD589\uC6B4\uC758 \uD074\uB85C\uBC84 \uBA54\uB2EC\uB9AC\uC628"
+  - _groupKey: EQ_ACC_T1_002
+    _image: {fileID: -1541126080, guid: 6e6f224394e18214eb815c03b8365ab7, type: 3}
+    _itemName: "\uC740\uBE5B \uB9E5\uB3D9\uC758 \uD39C\uB358\uD2B8"

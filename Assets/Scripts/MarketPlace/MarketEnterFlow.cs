@@ -117,7 +117,7 @@ public class MarketEnterFlow : MonoBehaviour
             // { "indexesCustomId", "" },      // (선택) 기본 "market_indexes"
             // { "tradesCustomId", "" },       // (선택) 기본 "market_trades"
             // { "escrowCustomId", "" },       // (선택) 기본 "escrow"
-            // { "includeEscrowItem", "" },    // (선택) escrow 아이템 첨부 조회 여부
+            // { "includeEscrowItem", false },    // (선택) escrow 아이템 첨부 조회 여부
         };
 
         var walletTask = TryCallAsync<GetWalletResult>(EP_GetWallet, walletArgs, ct);

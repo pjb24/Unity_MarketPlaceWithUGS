@@ -9,10 +9,6 @@
  * - 인덱스 키에서 tradeId를 추출한 뒤,
  *   DataApi.getCustomItems()로 tradesCustomId의 TRADE_<tradeId>를 배치 조회한다.
  * - 아이템 id(=itemInstanceId)는 prefix 금지.
- * - response에 templateKey를 포함한다:
- *   - trade.templateKey가 있으면 그대로 사용
- *   - 없으면 includeEscrowItem=true일 때 escrowItem.templateKey에서 보강
- *   - 둘 다 없으면 null (무음 보정 금지 아님: 데이터 부재는 정상 케이스로 취급)
  * - 아이템 이동은 Custom Items 내부에서 customId 변경으로 수행(이 스크립트는 조회만 한다).
  * - 경매장에 등록된 아이템은 customId="escrow"에 존재(필요 시 includeEscrowItem로 첨부 조회).
  * - 데이터 불일치(인덱스는 있는데 trade가 없음, role 불일치 등)는 무음 폴백 금지:
@@ -43,8 +39,6 @@
  * return:
  * - ok=true: playerId, role, items: trade[], nextPageToken, skipped
  *   (includeEscrowItem=true면 trade에 escrowItem 필드를 붙여 반환)
- *   - 각 trade에는 templateKey가 포함된다(없으면 null)
- *   - includeEscrowItem=true면 trade에 escrowItem 필드를 붙여 반환
  * - ok=false: errorCode, errorMessage
  */
 
@@ -84,7 +78,12 @@ module.exports = async function GetTradeHistory({ params, context, logger }) {
 
   const prefixSeller = `IDX_TRADE_SELLER_${_playerId}_`;
   const prefixBuyer = `IDX_TRADE_BUYER_${_playerId}_`;
-    const prefixes = (_role === "SELL") ? [prefixSeller] : (_role === "BUY") ? [prefixBuyer] : [prefixSeller, prefixBuyer];
+
+  const prefixes = (_role === "SELL")
+    ? [prefixSeller]
+    : (_role === "BUY")
+      ? [prefixBuyer]
+      : [prefixSeller, prefixBuyer];
 
   // 1) 인덱스 키 수집 (getCustomKeys는 서버 prefix 필터 없음 -> 스캔)
   const matchedIndexKeys = [];
@@ -113,7 +112,9 @@ module.exports = async function GetTradeHistory({ params, context, logger }) {
     }
 
     const lastKey = rows[rows.length - 1]?.key;
-      if (typeof lastKey === "string" && lastKey.length > 0) nextPageToken = lastKey;
+    if (typeof lastKey === "string" && lastKey.length > 0) {
+      nextPageToken = lastKey;
+    }
 
     for (const r of rows) {
       const k = r?.key;
@@ -195,7 +196,9 @@ module.exports = async function GetTradeHistory({ params, context, logger }) {
         if (!isPlainObject(t)) continue;
 
       const itemInstanceId = t.itemInstanceId;
-        if (typeof itemInstanceId === "string" && itemInstanceId.length > 0) escrowIdSet.add(itemInstanceId);
+      if (typeof itemInstanceId === "string" && itemInstanceId.length > 0) {
+        escrowIdSet.add(itemInstanceId);
+      }
     }
 
     const escrowIds = Array.from(escrowIdSet);
@@ -241,8 +244,6 @@ module.exports = async function GetTradeHistory({ params, context, logger }) {
       continue;
     }
 
-      let templateKey = (typeof t.templateKey === "string" && t.templateKey.length > 0) ? t.templateKey : null;
-
       if (includeEscrowItem) {
       const itemInstanceId = t.itemInstanceId;
 
@@ -250,22 +251,16 @@ module.exports = async function GetTradeHistory({ params, context, logger }) {
         const escrowItem = escrowMap.get(itemInstanceId);
           if (!isPlainObject(escrowItem)) {
             logger.warning(`GetTradeHistory FALLBACK: escrow item not found (may be moved out after completion). tradeId=${entry.tradeId}, itemInstanceId=${itemInstanceId}, escrowCustomId=${escrowCustomId}`);
-            items.push({ ...t, templateKey, escrowItem: null });
-            continue;
-          }
-
-          if (!templateKey) {
-            const tk2 = escrowItem.templateKey;
-            if (typeof tk2 === "string" && tk2.length > 0) templateKey = tk2;
+          items.push({ ...t, escrowItem: null });
+        } else {
+          items.push({ ...t, escrowItem });
         }
-
-          items.push({ ...t, templateKey, escrowItem });
       } else {
           logger.warning(`GetTradeHistory FALLBACK: trade missing itemInstanceId while includeEscrowItem=true. tradeId=${entry.tradeId}`);
-          items.push({ ...t, templateKey, escrowItem: null });
+        items.push({ ...t, escrowItem: null });
       }
     } else {
-        items.push({ ...t, templateKey });
+      items.push(t);
     }
   }
 

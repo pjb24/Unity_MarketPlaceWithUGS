@@ -22,6 +22,7 @@ public class ListingRowView : MonoBehaviour
     [SerializeField] private TextMeshProUGUI _title;
     [SerializeField] private TextMeshProUGUI _itemId;
     [SerializeField] private TextMeshProUGUI _instanceId;
+    [SerializeField] private ItemStaticDatabase _itemStaticDatabase;
 
     private Action _onClick;
 
@@ -65,9 +66,21 @@ public class ListingRowView : MonoBehaviour
         // Title: listingId
         // Sub  : itemInstanceId / seller
         // Right: price + status
-        var title = Safe(dto.listingId);
-        var sub = $"item={Safe(dto.itemInstanceId)}";
-        var right = $"{dto.price:N0}  {Safe(dto.status)}";
+
+        if (!_itemStaticDatabase.TryGet(dto?.escrowItem?.templateKey, out var staticEntry))
+        {
+            Debug.LogWarning($"[ItemUI] 아이템 메타 없음: {dto?.escrowItem?.templateKey}");
+            return;
+        }
+
+        if (staticEntry.Image)
+        {
+            _image.sprite = staticEntry.Image;
+        }
+
+        var title = Safe(staticEntry.ItemName);
+        var sub = $"price = {dto.price:N0}";
+        var right = $"status = {Safe(dto.status)}";
 
         SetTexts(title, sub, right);
     }
@@ -81,13 +94,26 @@ public class ListingRowView : MonoBehaviour
             return;
         }
 
+        if (!_itemStaticDatabase.TryGet(dto.templateKey, out var staticEntry))
+        {
+            Debug.LogWarning($"[ItemUI] 아이템 메타 없음: {dto.templateKey}");
+            return;
+        }
+
+        if (staticEntry.Image)
+        {
+            _image.sprite = staticEntry.Image;
+        }
+
         // 예시 표시 규칙:
         // Title: tradeId
         // Sub  : listingId / buyer / seller
         // Right: price + fee + status
-        var title = Safe(dto.tradeId);
+
+        var title = Safe(staticEntry.ItemName);
         var sub = $"listing={Safe(dto.listingId)}  buyer={Safe(dto.buyerPlayerId)}  seller={Safe(dto.sellerPlayerId)}";
         var right = $"{dto.price:N0} (fee {(dto.price * 0.1f):N0})";
+        sub = "";
 
         SetTexts(title, sub, right);
     }
@@ -114,8 +140,10 @@ public class ListingRowView : MonoBehaviour
         string groupKey = "";
         string instanceId = "";
         string tradable = "";
+        string templateKey = "";
         if (frag != null)
         {
+            templateKey = frag.templateKey;
             groupKey = frag.groupKey;
             instanceId = frag.instanceId;
             tradable = frag.payload?.market?.tradable.ToString();
@@ -123,14 +151,28 @@ public class ListingRowView : MonoBehaviour
 
         if (eq != null)
         {
+            templateKey = eq.templateKey;
             groupKey = eq.groupKey;
             instanceId = eq.instanceId;
             tradable = eq.payload?.market?.tradable.ToString();
         }
 
-        var title = Safe(groupKey);
-        var sub = $"instanceId={instanceId}";
-        var right = $"tradable={tradable}";
+        if (!_itemStaticDatabase.TryGet(templateKey, out var staticEntry))
+        {
+            Debug.LogWarning($"[ItemUI] 아이템 메타 없음: {groupKey}");
+            return;
+        }
+
+        if (staticEntry.Image)
+        {
+            _image.sprite = staticEntry.Image;
+        }
+
+        var title = Safe(staticEntry.ItemName);
+        //var sub = $"instanceId={instanceId}";
+        //var right = $"tradable={tradable}";
+        var sub = $"";
+        var right = $"";
 
         SetTexts(title, sub, right);
     }

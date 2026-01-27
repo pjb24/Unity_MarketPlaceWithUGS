@@ -1242,6 +1242,7 @@ MonoBehaviour:
   _defaultExpiresInSeconds: 604800
   _writeAuditLedger: 0
   _mtCurrencyId: MARKETTOKEN
+  _itemStaticDatabase: {fileID: 11400000, guid: d48b07772a850664b86f52c0ff0c7cd4, type: 2}
   _tab: 0
 --- !u!4 &338561645
 Transform:
@@ -2355,7 +2356,7 @@ RectTransform:
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
   m_AnchoredPosition: {x: 0, y: 170}
-  m_SizeDelta: {x: 330, y: 220}
+  m_SizeDelta: {x: 250, y: 250}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &794545180
 MonoBehaviour:
@@ -8077,9 +8078,9 @@ SceneRoots:
   - {fileID: 832575519}
   - {fileID: 1995489241}
   - {fileID: 1213750200}
-  - {fileID: 338561645}
   - {fileID: 1824818241}
   - {fileID: 700937872}
   - {fileID: 1687853540}
   - {fileID: 822490384}
+  - {fileID: 338561645}
   - {fileID: 1512651022}

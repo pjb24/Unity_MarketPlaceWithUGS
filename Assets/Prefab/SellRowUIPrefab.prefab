@@ -584,6 +584,7 @@ MonoBehaviour:
   _title: {fileID: 8575800819559104096}
   _itemId: {fileID: 5695919268002824922}
   _instanceId: {fileID: 2330530669687615313}
+  _itemStaticDatabase: {fileID: 11400000, guid: d48b07772a850664b86f52c0ff0c7cd4, type: 2}
 --- !u!114 &8397641007906270566
 MonoBehaviour:
   m_ObjectHideFlags: 0

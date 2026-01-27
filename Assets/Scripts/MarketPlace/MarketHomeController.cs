@@ -85,6 +85,9 @@ public class MarketHomeController : MonoBehaviour
     [SerializeField] private bool _writeAuditLedger = false;            // 원장 “행위 로그”는 필요할 때만 켠다.
     [SerializeField] private string _mtCurrencyId = "MARKETTOKEN";      // WriteAuditLedger 켰을 때만 사용
 
+    [Header("SO")]
+    [SerializeField] private ItemStaticDatabase _itemStaticDatabase;
+
     [Header("Runtime")]
     [SerializeField] private E_Tab _tab = E_Tab.Market;
 
@@ -217,7 +220,18 @@ public class MarketHomeController : MonoBehaviour
         _infoPriceText.gameObject.SetActive(true);
         _infoFeeText.gameObject.SetActive(false);
 
-        _infoTitle.text = dto.itemInstanceId;
+        if (!_itemStaticDatabase.TryGet(dto?.escrowItem?.templateKey, out var staticEntry))
+        {
+            Debug.LogWarning($"[ItemUI] 아이템 메타 없음: {dto?.escrowItem?.templateKey}");
+            return;
+        }
+
+        if (staticEntry.Image)
+        {
+            _infoImage.sprite = staticEntry.Image;
+        }
+
+        _infoTitle.text = staticEntry.ItemName;
         // _infoImage
         _infoPrice.text = dto.price.ToString();
 
@@ -235,7 +249,7 @@ public class MarketHomeController : MonoBehaviour
         _infoBtnSell.gameObject.SetActive(false);
 
         _infoPriceText.gameObject.SetActive(true);
-        _infoFeeText.gameObject.SetActive(false);
+        _infoFeeText.gameObject.SetActive(true);
 
         _infoTitle.text = dto.listingId;
         // _infoImage
@@ -268,16 +282,39 @@ public class MarketHomeController : MonoBehaviour
             Debug.Log($"EQ {eq.instanceId} state={eq.payload.state}");
         }
 
+        string groupKey = "";
+        string instanceId = "";
+        string tradable = "";
+        string templateKey = "";
         if (frag != null)
         {
-            _infoTitle.text = frag.instanceId;
-            _itemInstanceId = frag.instanceId;
+            templateKey = frag.templateKey;
+            groupKey = frag.groupKey;
+            instanceId = frag.instanceId;
+            tradable = frag.payload?.market?.tradable.ToString();
         }
+
         if (eq != null)
         {
-            _infoTitle.text = eq.instanceId;
-            _itemInstanceId = eq.instanceId;
+            templateKey = eq.templateKey;
+            groupKey = eq.groupKey;
+            instanceId = eq.instanceId;
+            tradable = eq.payload?.market?.tradable.ToString();
         }
+
+        if (!_itemStaticDatabase.TryGet(templateKey, out var staticEntry))
+        {
+            Debug.LogWarning($"[ItemUI] 아이템 메타 없음: {templateKey}");
+            return;
+        }
+
+        if (staticEntry.Image)
+        {
+            _infoImage.sprite = staticEntry.Image;
+        }
+
+        _infoTitle.text = staticEntry.ItemName;
+        _itemInstanceId = instanceId;
 
         // _infoImage
         _infoFee.text = "0";

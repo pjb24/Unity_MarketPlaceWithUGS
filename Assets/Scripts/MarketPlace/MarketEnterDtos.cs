@@ -536,6 +536,9 @@ public sealed class GetTradeHistoryResult
 [Serializable]
 public sealed class TradeRecordDto
 {
+    // 핵심 필드(스크립트에서 직접 참조/가공)
+    public string templateKey; // trade.templateKey 우선, 없으면 escrowItem.templateKey로 보강, 둘 다 없으면 null
+
     // identifiers
     public string tradeId;
     public string listingId;
