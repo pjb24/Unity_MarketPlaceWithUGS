@@ -1,0 +1,86 @@
+const { DataApi } = require("@unity-services/cloud-save-1.4");
+const { InventoryApi, CurrenciesApi, ConfigurationApi } = require("@unity-services/economy-2.4");
+
+const MARKET_CUSTOM_ID = "market";
+const KEY_ACTIVE = "active_listings";
+
+async function getCustomItem(cloudSaveApi, projectId, key) {
+  const res = await cloudSaveApi.getCustomItems(projectId, MARKET_CUSTOM_ID, [key]);
+  const items = res.data.results || [];
+  if (items.length === 0) return { value: null, writeLock: null };
+  return { value: items[0].value ?? null, writeLock: items[0].writeLock ?? null };
+}
+
+async function setCustomItem(cloudSaveApi, projectId, key, value, writeLock) {
+  await cloudSaveApi.setCustomItem(projectId, MARKET_CUSTOM_ID, { key, value, writeLock });
+}
+
+module.exports = async ({ params, context, logger }) => {
+  const { projectId, playerId } = context;
+  
+  // ★ snake_case로 변경
+  const listing_id = params.listing_id;
+
+  if (!listing_id) throw new Error("listing_id required");
+
+  const cloudSaveApi = new DataApi(context);
+  const inventoryApi = new InventoryApi(context);
+  const currenciesApi = new CurrenciesApi(context);
+  const configurationApi = new ConfigurationApi(context);
+
+  const listingKey = "listing_" + listing_id;
+  const listingItem = await getCustomItem(cloudSaveApi, projectId, listingKey);
+  if (!listingItem.value) throw new Error("Listing not found");
+
+  const listing = listingItem.value;
+  if (listing.status !== "ACTIVE") throw new Error("Listing not active");
+  if (listing.sellerPlayerId === playerId) throw new Error("Seller cannot buy own listing");
+
+  // 구매자 config hash
+  const buyerConfig = await configurationApi.getPlayerConfiguration({ projectId, playerId });
+  const buyerHash = buyerConfig.data.metadata.configAssignmentHash;
+
+  // 1) 구매자 돈 차감
+  await currenciesApi.decrementPlayerCurrencyBalance({
+    projectId,
+    playerId,
+    currencyId: listing.currencyId,
+    configAssignmentHash: buyerHash,
+    currencyModifyBalanceRequest: { amount: listing.price }
+  });
+
+  // 2) 구매자에게 아이템 생성 (고유 인스턴스)
+  const newInstanceId = "mkt_" + listing_id + "_" + Date.now().toString(36);
+
+  await inventoryApi.addInventoryItem({
+    projectId,
+    playerId,
+    configAssignmentHash: buyerHash,
+    addInventoryRequest: {
+      inventoryItemId: listing.inventoryItemId,
+      playersInventoryItemId: newInstanceId,
+      instanceData: listing.instanceData || {}
+    }
+  });
+
+  // 3) listing SOLD 처리
+  listing.status = "SOLD";
+  listing.buyerPlayerId = playerId;
+  listing.soldAt = Date.now();
+  await setCustomItem(cloudSaveApi, projectId, listingKey, listing, listingItem.writeLock);
+
+  // 4) active_listings에서 제거
+  const active = await getCustomItem(cloudSaveApi, projectId, KEY_ACTIVE);
+  const list = Array.isArray(active.value) ? active.value : [];
+  const next = list.filter(x => x !== listing_id);
+  await setCustomItem(cloudSaveApi, projectId, KEY_ACTIVE, next, active.writeLock);
+
+  // 5) 판매자 정산 대기(earn_<sellerId>)
+  const earnKey = "earn_" + listing.sellerPlayerId;
+  const earn = await getCustomItem(cloudSaveApi, projectId, earnKey);
+  const current = typeof earn.value === "number" ? earn.value : 0;
+  await setCustomItem(cloudSaveApi, projectId, earnKey, current + listing.price, earn.writeLock);
+
+  logger.info(`Bought listing ${listing_id}`);
+  return { ok: true, newPlayersInventoryItemId: newInstanceId };
+};

@@ -1,0 +1,48 @@
+const { DataApi } = require("@unity-services/cloud-save-1.4");
+const { CurrenciesApi, ConfigurationApi } = require("@unity-services/economy-2.4");
+
+const MARKET_CUSTOM_ID = "market";
+
+async function getCustomItem(cloudSaveApi, projectId, key) {
+  const res = await cloudSaveApi.getCustomItems(projectId, MARKET_CUSTOM_ID, [key]);
+  const items = res.data.results || [];
+  if (items.length === 0) return { value: null, writeLock: null };
+  return { value: items[0].value ?? null, writeLock: items[0].writeLock ?? null };
+}
+
+async function setCustomItem(cloudSaveApi, projectId, key, value, writeLock) {
+  await cloudSaveApi.setCustomItem(projectId, MARKET_CUSTOM_ID, { key, value, writeLock });
+}
+
+module.exports = async ({ params, context }) => {
+  const { projectId, playerId } = context;
+  
+  // ★ snake_case로 변경
+  const currency_id = params.currency_id;
+
+  if (!currency_id) throw new Error("currency_id required");
+
+  const cloudSaveApi = new DataApi(context);
+  const currenciesApi = new CurrenciesApi(context);
+  const configurationApi = new ConfigurationApi(context);
+
+  const earnKey = "earn_" + playerId;
+  const earn = await getCustomItem(cloudSaveApi, projectId, earnKey);
+
+  const amount = typeof earn.value === "number" ? earn.value : 0;
+  if (amount <= 0) return { ok: true, claimed: 0 };
+
+  const cfg = await configurationApi.getPlayerConfiguration({ projectId, playerId });
+  const hash = cfg.data.metadata.configAssignmentHash;
+
+  await currenciesApi.incrementPlayerCurrencyBalance({
+    projectId,
+    playerId,
+    currencyId: currency_id,
+    configAssignmentHash: hash,
+    currencyModifyBalanceRequest: { amount }
+  });
+
+  await setCustomItem(cloudSaveApi, projectId, earnKey, 0, earn.writeLock);
+  return { ok: true, claimed: amount };
+};

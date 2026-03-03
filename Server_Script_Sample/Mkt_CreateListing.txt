@@ -1,0 +1,84 @@
+const { DataApi } = require("@unity-services/cloud-save-1.4");
+const { InventoryApi, ConfigurationApi } = require("@unity-services/economy-2.4");
+
+const MARKET_CUSTOM_ID = "market";
+const KEY_ACTIVE = "active_listings";
+
+function createListingId() {
+  return "lst_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
+}
+
+async function getCustomItem(cloudSaveApi, projectId, key) {
+  const res = await cloudSaveApi.getCustomItems(projectId, MARKET_CUSTOM_ID, [key]);
+  const items = res.data.results || [];
+  if (items.length === 0) return { value: null, writeLock: null };
+  return { value: items[0].value ?? null, writeLock: items[0].writeLock ?? null };
+}
+
+async function setCustomItem(cloudSaveApi, projectId, key, value, writeLock) {
+  await cloudSaveApi.setCustomItem(projectId, MARKET_CUSTOM_ID, { key, value, writeLock });
+}
+
+module.exports = async ({ params, context, logger }) => {
+  const { projectId, playerId } = context;
+  
+  const players_inventory_item_id = params.players_inventory_item_id;
+  const price = params.price;
+  const currency_id = params.currency_id;
+
+  if (!players_inventory_item_id) throw new Error("players_inventory_item_id required");
+  if (!currency_id) throw new Error("currency_id required");
+  if (typeof price !== "number" || price <= 0) throw new Error("price must be positive number");
+
+  const cloudSaveApi = new DataApi(context);
+  const inventoryApi = new InventoryApi(context);
+  const configurationApi = new ConfigurationApi(context);
+
+  const configRes = await configurationApi.getPlayerConfiguration({ projectId, playerId });
+  const configHash = configRes.data.metadata.configAssignmentHash;
+
+  const invRes = await inventoryApi.getPlayerInventory({
+    projectId,
+    playerId,
+    configAssignmentHash: configHash,
+    playersInventoryItemIds: [players_inventory_item_id]
+  });
+
+  const results = invRes.data.results || [];
+  if (results.length === 0) throw new Error("Item instance not found in seller inventory");
+
+  const item = results[0];
+
+  await inventoryApi.deleteInventoryItem({
+    projectId,
+    playerId,
+    configAssignmentHash: configHash,
+    playersInventoryItemId: players_inventory_item_id,
+    inventoryDeleteRequest: {}
+  });
+
+  const listingId = createListingId();
+  const listingKey = "listing_" + listingId;
+
+  const listing = {
+    listingId,
+    status: "ACTIVE",
+    sellerPlayerId: playerId,
+    inventoryItemId: item.inventoryItemId,
+    instanceData: item.instanceData || {},
+    currencyId: currency_id,
+    price,
+    createdAt: Date.now()
+  };
+
+  await setCustomItem(cloudSaveApi, projectId, listingKey, listing, null);
+
+  const active = await getCustomItem(cloudSaveApi, projectId, KEY_ACTIVE);
+  const list = Array.isArray(active.value) ? active.value : [];
+  list.unshift(listingId);
+
+  await setCustomItem(cloudSaveApi, projectId, KEY_ACTIVE, list, active.writeLock);
+
+  logger.info("Created listing " + listingId);
+  return { listingId };
+};

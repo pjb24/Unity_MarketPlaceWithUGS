@@ -1,0 +1,33 @@
+const { DataApi } = require("@unity-services/cloud-save-1.4");
+
+const MARKET_CUSTOM_ID = "market";
+const KEY_ACTIVE = "active_listings";
+
+module.exports = async ({ params, context }) => {
+  const { projectId } = context;
+  const { limit, sort } = params;
+
+  const cloudSaveApi = new DataApi(context);
+
+  const activeRes = await cloudSaveApi.getCustomItems(projectId, MARKET_CUSTOM_ID, [KEY_ACTIVE]);
+  const activeItems = activeRes.data.results || [];
+  const activeList = activeItems.length > 0 && Array.isArray(activeItems[0].value) ? activeItems[0].value : [];
+
+  const take = typeof limit === "number" ? Math.max(1, Math.min(50, limit)) : 30;
+  const listingIds = activeList.slice(0, take);
+
+  const keys = listingIds.map(id => "listing_" + id);
+  const listingRes = keys.length > 0
+    ? await cloudSaveApi.getCustomItems(projectId, MARKET_CUSTOM_ID, keys)
+    : { data: { results: [] } };
+
+  let listings = (listingRes.data.results || [])
+    .map(x => x.value)
+    .filter(x => x && x.status === "ACTIVE");
+
+  if (sort === "PRICE_ASC") listings.sort((a, b) => a.price - b.price);
+  else if (sort === "PRICE_DESC") listings.sort((a, b) => b.price - a.price);
+  else listings.sort((a, b) => b.createdAt - a.createdAt);
+
+  return { listings };
+};
